@@ -1,8 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-const htmlPath = path.join(import.meta.dirname, "dashboard.html");
-const loginPath = path.join(import.meta.dirname, "login.html");
+// `import.meta.dirname` is only on Node 20.11+; fall back so these resolve on
+// older/hosted runtimes instead of yielding an undefined path.
+const __dirname =
+  import.meta.dirname ?? path.dirname(fileURLToPath(import.meta.url));
+
+const htmlPath = path.join(__dirname, "dashboard.html");
+const loginPath = path.join(__dirname, "login.html");
 
 /**
  * Return the self-contained dashboard HTML. Read from disk each call so edits

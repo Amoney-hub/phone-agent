@@ -6,8 +6,14 @@ import dotenv from "dotenv";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // Resolve .env relative to this source file, not the process cwd — Claude
-// Desktop launches the server from a different working directory.
-dotenv.config({ path: path.join(__dirname, "..", ".env") });
+// Desktop launches the server from a different working directory. Hosted
+// platforms inject env vars directly (no .env file), so guard against any
+// failure loading it.
+try {
+  dotenv.config({ path: path.join(__dirname, "..", ".env") });
+} catch {
+  /* platform provides env vars; ignore .env load failures */
+}
 
 // Default DB lives at the project root next to package.json.
 const dbPath = process.env.PHONE_AGENT_DB

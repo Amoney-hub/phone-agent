@@ -1,10 +1,24 @@
 #!/usr/bin/env node
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
 
+// Derive the directory of this source file. `import.meta.dirname` is only
+// available on Node 20.11+, so fall back to deriving it from the file URL —
+// otherwise `path.join(undefined, ...)` throws on older/hosted runtimes.
+const __dirname =
+  import.meta.dirname ?? path.dirname(fileURLToPath(import.meta.url));
+
 // Resolve .env relative to this source file, not the process cwd — Claude
-// Desktop launches the server from a different working directory.
-dotenv.config({ path: path.join(import.meta.dirname, "..", ".env") });
+// Desktop launches the server from a different working directory. In hosted
+// environments (e.g. Railway) env vars are injected directly and there is no
+// .env file; dotenv treats a missing file as a no-op, but guard anyway so a
+// bad path can never crash the process at import time.
+try {
+  dotenv.config({ path: path.join(__dirname, "..", ".env") });
+} catch {
+  /* env vars are provided by the platform; ignore .env load failures */
+}
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";

@@ -1,11 +1,23 @@
 #!/usr/bin/env node
 import crypto from "node:crypto";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
 import express from "express";
 
-// Resolve .env relative to this source file, not the process cwd.
-dotenv.config({ path: path.join(import.meta.dirname, "..", ".env") });
+// `import.meta.dirname` is only on Node 20.11+; fall back so path.join never
+// receives undefined on older/hosted runtimes.
+const __dirname =
+  import.meta.dirname ?? path.dirname(fileURLToPath(import.meta.url));
+
+// Resolve .env relative to this source file, not the process cwd. In hosted
+// environments (e.g. Railway) env vars are injected directly and no .env
+// exists; guard so a missing file can never crash at import time.
+try {
+  dotenv.config({ path: path.join(__dirname, "..", ".env") });
+} catch {
+  /* platform provides env vars; ignore .env load failures */
+}
 
 import {
   saveCallReport,
@@ -34,7 +46,9 @@ import {
 import { evaluateCallHours } from "./callhours.js";
 import { countQueuedCalls } from "./db.js";
 
-const PORT = process.env.WEBHOOK_PORT || 3117;
+// Hosted platforms (Railway, Render, Heroku, …) assign the port via PORT and
+// route external traffic to it, so it must take precedence.
+const PORT = process.env.PORT || process.env.WEBHOOK_PORT || 3117;
 
 const app = express();
 app.use(express.json({ limit: "10mb" }));
