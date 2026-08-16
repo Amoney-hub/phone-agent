@@ -115,6 +115,34 @@ Environment variables are read from the `.env` file next to the code, so the
 client config doesn't need to repeat your secrets. (You can also pass them via
 the client's own `env` block if you prefer.)
 
+## Remote mode (shared database)
+
+By default the MCP server keeps its own local SQLite file. If you also run the
+webhook/dashboard server elsewhere (e.g. on Railway), that deployment has a
+*separate* database — so calls placed locally and the end-of-call reports
+received by the hosted webhook would land in two different places.
+
+Set **`REMOTE_API_URL`** to the hosted server's base URL to fix this: all four
+call tools (`make_call`, `call_list`, `get_call_result`, `get_batch_result`)
+plus `add_contact`/`send_text` then call the hosted HTTP API instead of touching
+local SQLite, so everything shares one database.
+
+```
+REMOTE_API_URL=https://your-app.up.railway.app
+TRIGGER_API_KEY=<same value as on the server>
+```
+
+- Requests authenticate with `TRIGGER_API_KEY` as a bearer token; the hosted
+  `/api` routes accept **either** that token **or** a dashboard session.
+- SMS (`send_text`) is always sent from the local process (there is no hosted
+  SMS route); it just resolves the contact through the API first.
+- When `REMOTE_API_URL` is unset, everything works exactly as before against
+  local SQLite — the local database is not even opened in remote mode.
+
+The hosted API routes used by remote mode: contacts CRUD (`/api/contacts`),
+`POST /api/calls`, `POST /api/calls/batch`, `GET /api/calls/:id`, and
+`GET /api/calls/batch/:batchId`.
+
 ## Typical flow
 
 1. `add_contact` — `{ "name": "Mom", "phone": "+15551234567" }`
@@ -298,11 +326,13 @@ require a valid session (see [Dashboard authentication](#dashboard-authenticatio
 
 ```
 src/
-  index.js    MCP server: registers the contact/call tools, wires stdio transport
+  index.js    MCP server: registers the contact/call tools, picks local/remote backend
+  remote.js   HTTP client + backend used when REMOTE_API_URL is set (bearer auth)
+  calls.js    Shared call ops (place/batch/fetch) used by the server and local MCP mode
   db.js       SQLite storage (better-sqlite3): contacts + cached call reports (batch + outcome columns)
   twilio.js   Twilio SMS client
   vapi.js     Vapi call client + system-prompt builder
-  auth.js     Dashboard session auth (bcrypt login, signed-cookie sessions)
+  auth.js     Dashboard session auth (bcrypt) + bearer-or-session API guard
   trigger.js  Inbound trigger endpoint: bearer auth, rate limit, out-of-hours queue
   callhours.js   Business-hours window parsing + timezone evaluation
   webhook.js  Express server (port 3117): Vapi webhook + dashboard + /api routes

@@ -24,17 +24,14 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 
-import crypto from "node:crypto";
-
-import {
-  addContact,
-  getContact,
-  getStoredCall,
-  recordPlacedCall,
-  getBatchCalls,
-} from "./db.js";
 import { sendSms } from "./twilio.js";
-import { createCall, getCall } from "./vapi.js";
+
+// When REMOTE_API_URL is set, all data operations go through the hosted HTTP
+// API (so contacts and call records live in one database). Otherwise we use a
+// local SQLite database. The concrete backend is chosen at boot in main();
+// tool handlers only ever talk to `backend`.
+const REMOTE = process.env.REMOTE_API_URL;
+let backend;
 
 const server = new McpServer({
   name: "phone-agent",
@@ -56,22 +53,13 @@ function errorResult(err) {
 
 // Texting requires a real, SMS-capable Twilio number. Until one is configured
 // (Twilio needs a paid upgrade), treat send_text as unavailable rather than
-// letting it fail deep inside the Twilio API call.
+// letting it fail deep inside the Twilio API call. SMS is always sent from this
+// process (there is no hosted SMS route), even in remote mode.
 const TWILIO_NUMBER_PLACEHOLDER = "+15551234567";
 
 function isTextingConfigured() {
   const num = process.env.TWILIO_NUMBER;
   return Boolean(num) && num !== TWILIO_NUMBER_PLACEHOLDER;
-}
-
-function resolveContact(name) {
-  const contact = getContact(name);
-  if (!contact) {
-    throw new Error(
-      `No contact named "${name}". Add one first with add_contact.`
-    );
-  }
-  return contact;
 }
 
 // Tools ---------------------------------------------------------------------
@@ -81,7 +69,7 @@ server.registerTool(
   {
     title: "Add Contact",
     description:
-      "Add or update a contact. Stores the name and phone number (E.164, e.g. +15551234567) in SQLite.",
+      "Add or update a contact. Stores the name and phone number (E.164, e.g. +15551234567).",
     inputSchema: {
       name: z.string().min(1).describe("Contact's name (unique, case-insensitive)."),
       phone: z
@@ -92,7 +80,7 @@ server.registerTool(
   },
   async ({ name, phone }) => {
     try {
-      const contact = addContact(name, phone);
+      const contact = await backend.addContact(name, phone);
       return textResult(
         `Saved contact "${contact.name}" with number ${contact.phone}.`
       );
@@ -121,7 +109,12 @@ server.registerTool(
           )
         );
       }
-      const contact = resolveContact(name);
+      const contact = await backend.getContactByName(name);
+      if (!contact) {
+        throw new Error(
+          `No contact named "${name}". Add one first with add_contact.`
+        );
+      }
       const result = await sendSms(contact.phone, message);
       return textResult(
         `Text sent to ${contact.name} (${contact.phone}). Twilio SID ${result.sid}, status: ${result.status}.`
@@ -155,18 +148,9 @@ server.registerTool(
   },
   async ({ name, objective, voicemail_message }) => {
     try {
-      const contact = resolveContact(name);
-      const call = await createCall(contact.phone, objective, {
-        voicemailMessage: voicemail_message,
-      });
-      // Record it locally so it shows up right away (batch_id stays null).
-      recordPlacedCall({
-        callId: call.id,
-        customerNumber: contact.phone,
-        status: call.status ?? "queued",
-      });
+      const r = await backend.placeCall(name, objective, voicemail_message);
       return textResult(
-        `Calling ${contact.name} (${contact.phone}).\ncall_id: ${call.id}\nstatus: ${call.status ?? "queued"}\nUse get_call_result with this call_id to fetch the transcript and summary once the call ends.`
+        `Calling ${r.contact.name} (${r.contact.phone}).\ncall_id: ${r.call_id}\nstatus: ${r.status}\nUse get_call_result with this call_id to fetch the transcript and summary once the call ends.`
       );
     } catch (err) {
       return errorResult(err);
@@ -179,68 +163,44 @@ server.registerTool(
   {
     title: "Get Call Result",
     description:
-      "Fetch the status, transcript, and summary of a Vapi call by its call_id.",
+      "Fetch the status, structured outcome, transcript, and summary of a Vapi call by its call_id.",
     inputSchema: {
       call_id: z.string().min(1).describe("The call_id returned by make_call."),
     },
   },
   async ({ call_id }) => {
     try {
-      // Prefer the locally stored webhook report (instant, no network).
-      const stored = getStoredCall(call_id);
-      let call;
-      let source;
-      if (stored) {
-        call = {
-          id: stored.call_id,
-          status: stored.status,
-          endedReason: stored.ended_reason,
-          summary: stored.summary,
-          transcript: stored.transcript,
-          recordingUrl: stored.recording_url,
-          outcome: stored.outcome,
-          callbackTime: stored.callback_time,
-          notes: stored.notes,
-          batchId: stored.batch_id,
-        };
-        source = "webhook";
-      } else {
-        // Not received via webhook yet — fall back to the Vapi API.
-        call = await getCall(call_id);
-        source = "api";
-      }
+      const { source, call } = await backend.getCallResult(call_id);
 
       const lines = [
-        `Call ${call.id}`,
-        `Status: ${call.status}${call.endedReason ? ` (${call.endedReason})` : ""}`,
+        `Call ${call.call_id}`,
+        `Status: ${call.status}${call.ended_reason ? ` (${call.ended_reason})` : ""}`,
       ];
-      if (call.batchId) lines.push(`Batch: ${call.batchId}`);
+      if (call.batch_id) lines.push(`Batch: ${call.batch_id}`);
       if (call.outcome) lines.push(`Outcome: ${call.outcome}`);
-      if (call.callbackTime) lines.push(`Callback time: ${call.callbackTime}`);
+      if (call.callback_time) lines.push(`Callback time: ${call.callback_time}`);
       if (call.notes) lines.push(`Notes: ${call.notes}`);
       if (call.summary) lines.push(`\nSummary:\n${call.summary}`);
       if (call.transcript) lines.push(`\nTranscript:\n${call.transcript}`);
-      if (call.recordingUrl) lines.push(`\nRecording: ${call.recordingUrl}`);
+      if (call.recording_url) lines.push(`\nRecording: ${call.recording_url}`);
       if (!call.summary && !call.transcript) {
         lines.push(
           "\n(No transcript or summary yet — the call may still be in progress. Try again shortly.)"
         );
       }
-      lines.push(
-        `\n(source: ${source === "webhook" ? "local webhook cache" : "Vapi API"})`
-      );
+      const sourceLabel =
+        source === "webhook"
+          ? REMOTE
+            ? "hosted webhook cache"
+            : "local webhook cache"
+          : "Vapi API";
+      lines.push(`\n(source: ${sourceLabel})`);
       return textResult(lines.join("\n"));
     } catch (err) {
       return errorResult(err);
     }
   }
 );
-
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-// Seconds between successive dials in a batch, to avoid hammering the provider
-// and to space out simultaneous ringing.
-const BATCH_STAGGER_MS = 3000;
 
 server.registerTool(
   "call_list",
@@ -268,33 +228,18 @@ server.registerTool(
   },
   async ({ names, objective, voicemail_message }) => {
     try {
-      const batchId = `batch_${crypto.randomUUID()}`;
-      const rows = [];
+      const { batch_id, results } = await backend.placeBatch(
+        names,
+        objective,
+        voicemail_message
+      );
 
-      for (let i = 0; i < names.length; i++) {
-        if (i > 0) await sleep(BATCH_STAGGER_MS);
-        const name = names[i];
-        try {
-          const contact = resolveContact(name);
-          const call = await createCall(contact.phone, objective, {
-            voicemailMessage: voicemail_message,
-          });
-          recordPlacedCall({
-            callId: call.id,
-            batchId,
-            customerNumber: contact.phone,
-            status: call.status ?? "queued",
-          });
-          rows.push({
-            name: contact.name,
-            phone: contact.phone,
-            call_id: call.id,
-            status: call.status ?? "queued",
-          });
-        } catch (err) {
-          rows.push({ name, phone: "—", call_id: "—", status: `error: ${err.message}` });
-        }
-      }
+      const rows = results.map((r) => ({
+        name: r.name,
+        phone: r.phone || "—",
+        call_id: r.call_id || "—",
+        status: r.error ? `error: ${r.error}` : r.status,
+      }));
 
       const table = [
         "| Contact | Phone | call_id | Status |",
@@ -304,9 +249,9 @@ server.registerTool(
         ),
       ].join("\n");
 
-      const placed = rows.filter((r) => r.call_id !== "—").length;
+      const placed = results.filter((r) => r.call_id).length;
       return textResult(
-        `Batch ${batchId} — placed ${placed}/${names.length} call(s).\n\n${table}\n\nUse get_batch_result with batch_id "${batchId}" to see each call's outcome once the calls end.`
+        `Batch ${batch_id} — placed ${placed}/${names.length} call(s).\n\n${table}\n\nUse get_batch_result with batch_id "${batch_id}" to see each call's outcome once the calls end.`
       );
     } catch (err) {
       return errorResult(err);
@@ -329,8 +274,8 @@ server.registerTool(
   },
   async ({ batch_id }) => {
     try {
-      const calls = getBatchCalls(batch_id);
-      if (calls.length === 0) {
+      const { calls } = await backend.getBatchResult(batch_id);
+      if (!calls || calls.length === 0) {
         return textResult(
           `No calls found for batch "${batch_id}". Double-check the batch_id from call_list.`
         );
@@ -357,9 +302,54 @@ server.registerTool(
   }
 );
 
+// Backend selection ---------------------------------------------------------
+
+/**
+ * Build the backend used by all tools. Remote mode proxies to the hosted API;
+ * local mode uses SQLite + Vapi directly. The local modules are imported
+ * lazily so remote mode never opens a local SQLite file.
+ */
+async function makeBackend() {
+  if (REMOTE) {
+    const { makeRemoteBackend } = await import("./remote.js");
+    console.error(
+      `phone-agent MCP server: using hosted API at ${REMOTE.replace(/\/+$/, "")}`
+    );
+    return makeRemoteBackend();
+  }
+
+  const db = await import("./db.js");
+  const calls = await import("./calls.js");
+  console.error("phone-agent MCP server: using local SQLite.");
+  return {
+    mode: "local",
+    addContact(name, phone) {
+      const c = db.addContact(name, phone);
+      return { name: c.name, phone: c.phone };
+    },
+    getContactByName(name) {
+      const c = db.getContact(name);
+      return c ? { name: c.name, phone: c.phone } : null;
+    },
+    placeCall(name, objective, vm) {
+      return calls.placeCall({ name, objective, voicemailMessage: vm });
+    },
+    placeBatch(names, objective, vm) {
+      return calls.placeBatch({ names, objective, voicemailMessage: vm });
+    },
+    getCallResult(id) {
+      return calls.getCallResult(id);
+    },
+    async getBatchResult(id) {
+      return { batch_id: id, calls: calls.getBatchResult(id) };
+    },
+  };
+}
+
 // Boot ----------------------------------------------------------------------
 
 async function main() {
+  backend = await makeBackend();
   const transport = new StdioServerTransport();
   await server.connect(transport);
   // Logs go to stderr so they don't corrupt the stdio JSON-RPC stream.

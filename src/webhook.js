@@ -35,9 +35,15 @@ import {
   verifyCredentials,
   setSessionCookie,
   clearSessionCookie,
-  requireAuthApi,
+  requireApiAuth,
   requireAuthPage,
 } from "./auth.js";
+import {
+  placeCall,
+  placeBatch,
+  getCallResult,
+  getBatchResult,
+} from "./calls.js";
 import {
   requireTriggerAuth,
   handleTriggerCall,
@@ -97,8 +103,9 @@ app.post("/api/trigger/call", requireTriggerAuth, handleTriggerCall);
 
 // --- Dashboard + JSON API --------------------------------------------------
 
-// Everything else under /api requires a valid session.
-app.use("/api", requireAuthApi);
+// Everything else under /api requires either a dashboard session OR the bearer
+// token (the latter is how the MCP server talks to this API in remote mode).
+app.use("/api", requireApiAuth);
 
 // Single self-contained dashboard page (session-protected).
 app.get("/", requireAuthPage, (_req, res) => {
@@ -169,6 +176,60 @@ app.delete("/api/contacts/:id", (req, res) => {
 // Call history, newest first, with resolved contact name.
 app.get("/api/calls", (_req, res) => {
   res.json(listCalls());
+});
+
+// Place a single call to a saved contact.
+app.post("/api/calls", async (req, res) => {
+  const { name, objective, voicemail_message } = req.body ?? {};
+  if (!name || !objective) {
+    return res.status(400).json({ error: "name and objective are required." });
+  }
+  try {
+    const result = await placeCall({
+      name: String(name),
+      objective: String(objective),
+      voicemailMessage: voicemail_message,
+    });
+    res.status(201).json(result);
+  } catch (err) {
+    // A missing contact is a 404; anything else (Vapi failure) is a 502.
+    const notFound = /^No contact named/.test(err.message);
+    res.status(notFound ? 404 : 502).json({ error: err.message });
+  }
+});
+
+// Place a batch of calls to several saved contacts, staggered.
+app.post("/api/calls/batch", async (req, res) => {
+  const { names, objective, voicemail_message } = req.body ?? {};
+  if (!Array.isArray(names) || names.length === 0 || !objective) {
+    return res.status(400).json({ error: "names[] and objective are required." });
+  }
+  try {
+    const result = await placeBatch({
+      names: names.map(String),
+      objective: String(objective),
+      voicemailMessage: voicemail_message,
+    });
+    res.json(result);
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+});
+
+// Fetch all calls in a batch. Registered before /api/calls/:id so "batch" is
+// not captured as an :id.
+app.get("/api/calls/batch/:batchId", (req, res) => {
+  res.json({ batch_id: req.params.batchId, calls: getBatchResult(req.params.batchId) });
+});
+
+// Fetch one call's result (stored webhook report, else the Vapi API).
+app.get("/api/calls/:id", async (req, res) => {
+  try {
+    const { source, call } = await getCallResult(req.params.id);
+    res.json({ source, call });
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
 });
 
 /**

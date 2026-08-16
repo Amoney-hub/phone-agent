@@ -169,3 +169,29 @@ export function requireAuthPage(req, res, next) {
   if (isAuthConfigured() && getSession(req)) return next();
   return res.redirect("/login");
 }
+
+/**
+ * Does the request carry a valid `Authorization: Bearer <TRIGGER_API_KEY>`?
+ * Used to let trusted machine clients (the MCP server in remote mode) reach the
+ * JSON API without a dashboard session. Returns false when no key is set.
+ */
+export function hasValidBearer(req) {
+  const key = process.env.TRIGGER_API_KEY;
+  if (!key) return false;
+  const header = (req.get && req.get("authorization")) || req.headers?.authorization || "";
+  const m = String(header).match(/^Bearer\s+(.+)$/i);
+  const token = m ? m[1].trim() : "";
+  const a = Buffer.from(token);
+  const b = Buffer.from(key);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+/**
+ * Middleware for JSON API routes that should be reachable by EITHER a logged-in
+ * dashboard session OR a bearer token. Bearer wins first (machine clients);
+ * otherwise falls back to the session guard.
+ */
+export function requireApiAuth(req, res, next) {
+  if (hasValidBearer(req)) return next();
+  return requireAuthApi(req, res, next);
+}
