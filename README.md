@@ -315,10 +315,14 @@ require a valid session (see [Dashboard authentication](#dashboard-authenticatio
   `src/vapi.js` (`createCall`). Adjust the `voice`, `model`, and `transcriber`
   blocks there to change providers or personas.
 - The call system prompt is built by `buildSystemPrompt(objective)` in the same
-  file — tweak it to change tone, guardrails, or voicemail behavior.
-- Voicemail detection and the default voicemail message live in `src/vapi.js`
-  (`buildVoicemailDetection` and `buildVoicemailMessage`). The message can also be
-  overridden per call via the `voicemail_message` tool argument.
+  file. The objective is treated as a **private instruction** to the assistant —
+  delimited and never read aloud or quoted (it may itself contain directions like
+  "identify yourself as..."). Tweak this to change tone or guardrails.
+- Voicemail: by default the assistant **composes its own** short, natural
+  voicemail (paraphrasing the objective's intent — never speaking it verbatim).
+  Detection is configured by `buildVoicemailDetection`. To pin exact words for a
+  specific call, pass the `voicemail_message` tool argument; `buildVoicemailMessage`
+  is a generic, objective-free fallback.
 - Contacts are keyed by name (case-insensitive, unique). Adding a contact with an
   existing name updates that contact's number.
 

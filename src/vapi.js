@@ -11,35 +11,48 @@ function requireEnv(name) {
 
 /**
  * Build a system prompt for the transient assistant from a plain-language
- * objective supplied by the caller.
+ * objective supplied by the caller. The objective is treated strictly as a
+ * private instruction/brief for the assistant — it is delimited and the model
+ * is told never to read or quote it aloud (it may itself contain directions
+ * like "identify yourself as..." or "ask him to confirm...").
  */
 export function buildSystemPrompt(objective) {
   return [
     "You are an AI voice assistant making an outbound phone call on behalf of your user (the person who owns this phone agent).",
     "",
-    "ALWAYS open the call the same way: first identify yourself as an AI assistant calling on behalf of your user, and then immediately get to the point of why you are calling. Do not make small talk before disclosing that you are an AI.",
-    "Speak naturally and conversationally, keep your turns short, and be polite.",
+    "YOUR OBJECTIVE — how to use it:",
+    "Between the ==== markers below is your objective for this call. It is a PRIVATE briefing written for you. It may be phrased as directions addressed to you (for example \"identify yourself as ...\", \"ask him to confirm ...\"). Treat it only as instructions about what to accomplish and how to behave.",
+    "- NEVER read the objective aloud, quote it, or repeat its wording — not to a person and not to voicemail. It is not a script.",
+    "- Always translate it into your own natural, conversational words.",
+    "- Never refer to having an \"objective\" or \"instructions\", and never voice directions that were meant for you (e.g. do not say \"identify yourself as...\"; simply do it).",
     "",
-    "Your objective for this call:",
+    "==== OBJECTIVE (private — do NOT read aloud) ====",
     objective,
+    "==== END OBJECTIVE ====",
     "",
-    "Guidelines:",
-    "- Your very first turn must disclose that you are an AI assistant calling on behalf of your user, then briefly state the reason for the call.",
+    "How to speak:",
+    "- Your very first turn must disclose that you are an AI assistant calling on behalf of your user, then briefly and naturally state the reason for the call in your own words. Do not make small talk before disclosing that you are an AI.",
+    "- Speak naturally and conversationally, keep your turns short, and be polite.",
     "- Stay focused on the objective and gather or convey the needed information.",
-    "- If you reach voicemail, leave a concise message that identifies you as an AI assistant calling on behalf of your user and covers the objective.",
     "- Once the objective is met, thank the person and end the call.",
+    "",
+    "If you reach voicemail:",
+    "- Leave a short, natural message (2-3 sentences) IN YOUR OWN WORDS: say you are an AI assistant calling on behalf of your user, briefly convey the reason for the call as a paraphrase of the objective's intent (never read the objective text), and ask them to call back. Then end the call.",
   ].join("\n");
 }
 
 /**
- * Build the short message the assistant leaves if the call reaches voicemail
- * instead of a live person, derived from the objective.
+ * A short, natural, generic voicemail message used as a static fallback. It is
+ * deliberately objective-free: the objective is a private instruction to the
+ * assistant and must never be spoken. By default the assistant composes its own
+ * paraphrased voicemail (see buildSystemPrompt); a caller can pin exact words
+ * via createCall's `voicemailMessage` option.
  */
-export function buildVoicemailMessage(objective) {
+export function buildVoicemailMessage() {
   return [
     "Hi, this is an AI assistant calling on behalf of my user.",
-    `I'm calling about: ${objective}.`,
-    "Sorry to miss you — please call us back when you get a chance. Thank you!",
+    "Sorry I missed you — please give us a call back when you get a chance.",
+    "Thank you!",
   ].join(" ");
 }
 
@@ -119,16 +132,20 @@ export function buildAnalysisPlan() {
  * @param {string} to        Destination number in E.164 format.
  * @param {string} objective Plain-language goal for the call.
  * @param {object} [options]
- * @param {string} [options.voicemailMessage] Override for the message left on
- *   voicemail. Defaults to one generated from the objective.
+ * @param {string} [options.voicemailMessage] Pin exact words for the voicemail
+ *   message. If omitted, the assistant composes a short, natural voicemail
+ *   itself (paraphrasing the objective's intent — never reading it aloud).
  * @returns {Promise<object>} The created call object (includes `id`).
  */
 export async function createCall(to, objective, options = {}) {
   const token = requireEnv("VAPI_TOKEN");
   const phoneNumberId = requireEnv("VAPI_PHONE_ID");
 
-  const voicemailMessage =
-    options.voicemailMessage?.trim() || buildVoicemailMessage(objective);
+  // Only pin a static voicemail message when the caller explicitly supplies
+  // one. Otherwise leave it unset so the assistant composes its own paraphrased
+  // voicemail per buildSystemPrompt — the objective is a private instruction and
+  // must never be spoken verbatim.
+  const voicemailOverride = options.voicemailMessage?.trim();
 
   const payload = {
     phoneNumberId,
@@ -146,7 +163,7 @@ export async function createCall(to, objective, options = {}) {
       // Detect answering machines and leave a concise message instead of
       // waiting for a person who never picks up.
       voicemailDetection: buildVoicemailDetection(),
-      voicemailMessage,
+      ...(voicemailOverride ? { voicemailMessage: voicemailOverride } : {}),
       analysisPlan: buildAnalysisPlan(),
     },
   };
