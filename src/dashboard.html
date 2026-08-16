@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>phone-agent dashboard</title>
+<style>
+  :root {
+    --bg: #0e1116;
+    --panel: #171b22;
+    --panel-2: #1e232c;
+    --border: #2a313c;
+    --text: #e6e9ef;
+    --muted: #98a2b3;
+    --accent: #6ea8fe;
+    --accent-2: #3b82f6;
+    --good: #34d399;
+    --bad: #f87171;
+    --warn: #fbbf24;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.5 -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+  }
+  a { color: var(--accent); }
+  header {
+    padding: 20px 24px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  header h1 { font-size: 20px; margin: 0; letter-spacing: .3px; }
+  header h1 .dim { color: var(--muted); font-weight: 400; }
+  .status-strip { display: flex; gap: 10px; margin-left: auto; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 7px;
+    padding: 6px 12px; border-radius: 999px;
+    background: var(--panel-2); border: 1px solid var(--border);
+    font-size: 13px; color: var(--muted);
+  }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
+  .dot.on { background: var(--good); box-shadow: 0 0 8px var(--good); }
+  .dot.off { background: var(--bad); }
+  main { max-width: 980px; margin: 0 auto; padding: 24px; }
+  section { margin-bottom: 34px; }
+  section h2 { font-size: 16px; margin: 0 0 14px; color: var(--text); }
+  .panel {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 12px; overflow: hidden;
+  }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 12px 16px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .5px; }
+  tr:last-child td { border-bottom: none; }
+  td.actions { text-align: right; white-space: nowrap; }
+  input, button {
+    font: inherit; color: var(--text);
+  }
+  input[type=text] {
+    background: var(--panel-2); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 10px; min-width: 0;
+  }
+  input[type=text]:focus { outline: none; border-color: var(--accent-2); }
+  select {
+    font: inherit; color: var(--text);
+    background: var(--panel-2); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 10px;
+  }
+  select:focus { outline: none; border-color: var(--accent-2); }
+  .filter-row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 12px 16px; border-bottom: 1px solid var(--border);
+  }
+  .filter-row #callsCount { margin-left: auto; font-size: 13px; }
+  button {
+    cursor: pointer; border: 1px solid var(--border);
+    background: var(--panel-2); border-radius: 8px; padding: 8px 12px;
+  }
+  button:hover { border-color: var(--accent-2); }
+  button.primary { background: var(--accent-2); border-color: var(--accent-2); color: #fff; }
+  button.danger:hover { border-color: var(--bad); color: var(--bad); }
+  button.link { background: none; border: none; padding: 6px 8px; color: var(--accent); }
+  .add-row { display: flex; gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+  .add-row input { flex: 1; }
+  .muted { color: var(--muted); }
+  .empty { padding: 20px 16px; color: var(--muted); }
+  .badge {
+    display: inline-block; padding: 3px 9px; border-radius: 6px;
+    font-size: 12px; font-weight: 600; background: var(--panel-2);
+    border: 1px solid var(--border); color: var(--muted);
+  }
+  .badge.ended { color: var(--good); border-color: rgba(52,211,153,.4); }
+  .badge.failed, .badge.busy, .badge.no-answer { color: var(--bad); border-color: rgba(248,113,113,.4); }
+  /* Structured outcome badges. */
+  .badge.outcome { text-transform: none; letter-spacing: 0; }
+  .badge.o-booked, .badge.o-interested { color: var(--good); border-color: rgba(52,211,153,.4); }
+  .badge.o-not_interested { color: var(--bad); border-color: rgba(248,113,113,.4); }
+  .badge.o-voicemail, .badge.o-callback_requested { color: var(--warn); border-color: rgba(251,191,36,.4); }
+  .badge.o-reached { color: var(--accent); border-color: rgba(110,168,254,.4); }
+  .badge.tag { text-transform: none; letter-spacing: 0; color: var(--muted); background: var(--panel-2); }
+  .call {
+    padding: 14px 16px; border-bottom: 1px solid var(--border);
+  }
+  .call:last-child { border-bottom: none; }
+  .call-head {
+    display: flex; align-items: center; gap: 12px; cursor: pointer;
+  }
+  .call-head .who { font-weight: 600; }
+  .call-head .meta { color: var(--muted); font-size: 13px; margin-left: auto; display: flex; gap: 14px; }
+  .call-summary { margin: 8px 0 0; color: var(--muted); }
+  .call-meta { margin: 4px 0; font-size: 14px; }
+  .call-meta strong { color: var(--text); }
+  .call-details { display: none; margin-top: 12px; }
+  .call.open .call-details { display: block; }
+  .call.open .caret { transform: rotate(90deg); }
+  .caret { transition: transform .15s; color: var(--muted); }
+  pre.transcript {
+    white-space: pre-wrap; word-break: break-word;
+    background: var(--panel-2); border: 1px solid var(--border);
+    border-radius: 8px; padding: 12px; margin: 0 0 10px; max-height: 340px; overflow: auto;
+    font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  audio { width: 100%; margin-top: 4px; }
+  .toast {
+    position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+    background: var(--panel-2); border: 1px solid var(--border);
+    padding: 10px 16px; border-radius: 8px; opacity: 0; transition: opacity .2s;
+    pointer-events: none;
+  }
+  .toast.show { opacity: 1; }
+  .toast.err { border-color: var(--bad); color: var(--bad); }
+</style>
+</head>
+<body>
+<header>
+  <h1>phone-agent <span class="dim">dashboard</span></h1>
+  <div class="status-strip" id="statusStrip">
+    <span class="chip"><span class="dot" id="vapiDot"></span> Vapi</span>
+    <span class="chip"><span class="dot" id="twilioDot"></span> Twilio</span>
+    <button class="chip" id="logoutBtn" title="Sign out" style="cursor:pointer">Log out</button>
+  </div>
+</header>
+
+<main>
+  <section id="contactsSection">
+    <h2>Contacts</h2>
+    <div class="panel">
+      <form class="add-row" id="addForm">
+        <input type="text" id="addName" placeholder="Name" autocomplete="off" required />
+        <input type="text" id="addPhone" placeholder="+15551234567" autocomplete="off" required />
+        <button type="submit" class="primary">Add contact</button>
+      </form>
+      <table>
+        <thead><tr><th>Name</th><th>Phone</th><th></th></tr></thead>
+        <tbody id="contactsBody"></tbody>
+      </table>
+      <div class="empty" id="contactsEmpty" hidden>No contacts yet.</div>
+    </div>
+  </section>
+
+  <section id="callsSection">
+    <h2>Call history</h2>
+    <div class="panel">
+      <div class="filter-row">
+        <label for="outcomeFilter" class="muted">Outcome</label>
+        <select id="outcomeFilter">
+          <option value="">All</option>
+          <option value="reached">reached</option>
+          <option value="voicemail">voicemail</option>
+          <option value="not_interested">not_interested</option>
+          <option value="interested">interested</option>
+          <option value="booked">booked</option>
+          <option value="callback_requested">callback_requested</option>
+          <option value="__none">(no outcome)</option>
+        </select>
+        <span class="muted" id="callsCount"></span>
+      </div>
+      <div id="callsList"></div>
+      <div class="empty" id="callsEmpty" hidden>No calls recorded yet.</div>
+    </div>
+  </section>
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = (sel) => document.querySelector(sel);
+
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, (c) => (
+    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
+  ));
+}
+
+function toast(msg, isErr) {
+  const t = $("#toast");
+  t.textContent = msg;
+  t.classList.toggle("err", !!isErr);
+  t.classList.add("show");
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => t.classList.remove("show"), 2600);
+}
+
+async function api(method, url, body) {
+  const opts = { method, headers: {} };
+  if (body !== undefined) {
+    opts.headers["Content-Type"] = "application/json";
+    opts.body = JSON.stringify(body);
+  }
+  const res = await fetch(url, opts);
+  // Session expired or missing — bounce to the login page.
+  if (res.status === 401) {
+    window.location = "/login";
+    throw new Error("Not signed in");
+  }
+  const data = res.status === 204 ? null : await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error((data && data.error) || ("HTTP " + res.status));
+  return data;
+}
+
+function fmtDuration(sec) {
+  if (sec == null) return "—";
+  const m = Math.floor(sec / 60);
+  const s = String(sec % 60).padStart(2, "0");
+  return m + ":" + s;
+}
+
+// --- Status ---------------------------------------------------------------
+async function loadStatus() {
+  try {
+    const s = await api("GET", "/api/status");
+    setDot("#vapiDot", s.vapi);
+    setDot("#twilioDot", s.twilio);
+  } catch (e) { /* leave neutral */ }
+}
+function setDot(sel, on) {
+  const d = $(sel);
+  d.classList.remove("on", "off");
+  d.classList.add(on ? "on" : "off");
+  d.parentElement.title = on ? "Configured" : "Not configured";
+}
+
+// --- Contacts -------------------------------------------------------------
+async function loadContacts() {
+  const rows = await api("GET", "/api/contacts");
+  const body = $("#contactsBody");
+  body.innerHTML = "";
+  $("#contactsEmpty").hidden = rows.length > 0;
+  for (const c of rows) body.appendChild(contactRow(c));
+}
+
+function contactRow(c) {
+  const tr = document.createElement("tr");
+  tr.dataset.id = c.id;
+  tr.innerHTML =
+    '<td class="c-name">' + esc(c.name) + '</td>' +
+    '<td class="c-phone">' + esc(c.phone) + '</td>' +
+    '<td class="actions">' +
+      '<button class="link edit">Edit</button>' +
+      '<button class="link danger del">Delete</button>' +
+    '</td>';
+  tr.querySelector(".edit").onclick = () => startEdit(tr, c);
+  tr.querySelector(".del").onclick = () => removeContact(c);
+  return tr;
+}
+
+function startEdit(tr, c) {
+  tr.innerHTML =
+    '<td><input type="text" class="e-name" value="' + esc(c.name) + '"></td>' +
+    '<td><input type="text" class="e-phone" value="' + esc(c.phone) + '"></td>' +
+    '<td class="actions">' +
+      '<button class="link save">Save</button>' +
+      '<button class="link cancel">Cancel</button>' +
+    '</td>';
+  tr.querySelector(".save").onclick = async () => {
+    const name = tr.querySelector(".e-name").value.trim();
+    const phone = tr.querySelector(".e-phone").value.trim();
+    try {
+      await api("PUT", "/api/contacts/" + c.id, { name, phone });
+      toast("Contact updated");
+      loadContacts();
+    } catch (e) { toast(e.message, true); }
+  };
+  tr.querySelector(".cancel").onclick = () => loadContacts();
+  tr.querySelector(".e-name").focus();
+}
+
+async function removeContact(c) {
+  if (!confirm('Delete contact "' + c.name + '"?')) return;
+  try {
+    await api("DELETE", "/api/contacts/" + c.id);
+    toast("Contact deleted");
+    loadContacts();
+  } catch (e) { toast(e.message, true); }
+}
+
+$("#addForm").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const name = $("#addName").value.trim();
+  const phone = $("#addPhone").value.trim();
+  if (!name || !phone) return;
+  try {
+    await api("POST", "/api/contacts", { name, phone });
+    $("#addName").value = "";
+    $("#addPhone").value = "";
+    toast("Contact added");
+    loadContacts();
+  } catch (e) { toast(e.message, true); }
+});
+
+// --- Calls ----------------------------------------------------------------
+let allCalls = [];
+
+async function loadCalls() {
+  allCalls = await api("GET", "/api/calls");
+  renderCalls();
+}
+
+function renderCalls() {
+  const filter = $("#outcomeFilter").value;
+  const calls = allCalls.filter((c) => {
+    if (!filter) return true;
+    if (filter === "__none") return !c.outcome;
+    return c.outcome === filter;
+  });
+  const list = $("#callsList");
+  list.innerHTML = "";
+  $("#callsEmpty").hidden = allCalls.length > 0;
+  for (const call of calls) list.appendChild(callRow(call));
+
+  const count = filter
+    ? calls.length + " of " + allCalls.length + " call(s)"
+    : allCalls.length + " call(s)";
+  $("#callsCount").textContent = allCalls.length ? count : "";
+}
+
+$("#outcomeFilter").addEventListener("change", renderCalls);
+
+function statusBadge(status) {
+  const cls = String(status || "").toLowerCase().replace(/[^a-z-]/g, "-");
+  return '<span class="badge ' + esc(cls) + '">' + esc(status || "unknown") + '</span>';
+}
+
+function outcomeBadge(outcome) {
+  if (!outcome) return "";
+  const cls = "o-" + String(outcome).toLowerCase().replace(/[^a-z_]/g, "");
+  return '<span class="badge outcome ' + esc(cls) + '">' + esc(outcome) + '</span>';
+}
+
+function tagBadge(tag) {
+  if (!tag) return "";
+  return '<span class="badge tag" title="Source tag">🏷 ' + esc(tag) + '</span>';
+}
+
+function callRow(call) {
+  const div = document.createElement("div");
+  div.className = "call";
+  const who = call.contact_name || call.customer_number || "Unknown";
+  const hasDetails =
+    call.transcript || call.recording_url || call.callback_time || call.notes;
+
+  let head =
+    '<div class="call-head">' +
+      '<span class="caret">' + (hasDetails ? "▶" : "") + '</span>' +
+      '<span class="who">' + esc(who) + '</span>' +
+      statusBadge(call.ended_reason || call.status) +
+      outcomeBadge(call.outcome) +
+      tagBadge(call.source_tag) +
+      '<span class="meta">' +
+        '<span>⏱ ' + fmtDuration(call.duration_seconds) + '</span>' +
+        '<span>' + esc((call.updated_at || "").replace("T", " ")) + '</span>' +
+      '</span>' +
+    '</div>';
+
+  let summary = call.summary
+    ? '<p class="call-summary">' + esc(call.summary) + '</p>'
+    : '<p class="call-summary muted">No summary.</p>';
+
+  let details = '<div class="call-details">';
+  if (call.callback_time) {
+    details += '<p class="call-meta"><strong>Callback:</strong> ' + esc(call.callback_time) + '</p>';
+  }
+  if (call.notes) {
+    details += '<p class="call-meta"><strong>Notes:</strong> ' + esc(call.notes) + '</p>';
+  }
+  if (call.transcript) {
+    details += '<pre class="transcript">' + esc(call.transcript) + '</pre>';
+  }
+  if (call.recording_url) {
+    details += '<audio controls preload="none" src="' + esc(call.recording_url) + '"></audio>';
+  }
+  if (!call.transcript && !call.recording_url && !call.callback_time && !call.notes) {
+    details += '<span class="muted">No transcript or recording.</span>';
+  }
+  details += '</div>';
+
+  div.innerHTML = head + summary + details;
+  div.querySelector(".call-head").onclick = () => {
+    if (hasDetails) div.classList.toggle("open");
+  };
+  return div;
+}
+
+// --- Logout ---------------------------------------------------------------
+$("#logoutBtn").addEventListener("click", async () => {
+  try { await fetch("/logout", { method: "POST" }); } catch (e) { /* ignore */ }
+  window.location = "/login";
+});
+
+// --- Boot -----------------------------------------------------------------
+async function boot() {
+  await Promise.all([
+    loadStatus(),
+    loadContacts().catch((e) => toast(e.message, true)),
+    loadCalls().catch((e) => toast(e.message, true)),
+  ]);
+}
+boot();
+setInterval(loadCalls, 15000);
+</script>
+</body>
+</html>

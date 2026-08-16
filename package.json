@@ -1,0 +1,26 @@
+{
+  "name": "phone-agent",
+  "version": "1.0.0",
+  "description": "MCP server for managing contacts, sending texts (Twilio), and placing AI phone calls (Vapi).",
+  "type": "module",
+  "bin": {
+    "phone-agent": "src/index.js"
+  },
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "webhook": "node src/webhook.js",
+    "hash-password": "node scripts/hash-password.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "bcryptjs": "^3.0.3",
+    "better-sqlite3": "^12.2.0",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.2",
+    "zod": "^3.23.8"
+  }
+}
