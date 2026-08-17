@@ -131,6 +131,13 @@ export async function placeBatch({
  * (instant), otherwise the Vapi API. Returns a normalized snake_case object.
  * @returns {Promise<{source: "webhook"|"api", call: object}>}
  */
+// Playback path served by the webhook server, which fetches a fresh presigned
+// URL from Vapi on demand (the stored/raw URL isn't playable and presigned URLs
+// expire in minutes).
+function recordingPath(callId) {
+  return `/api/calls/${encodeURIComponent(callId)}/recording`;
+}
+
 export async function getCallResult(callId, clientId = null) {
   const stored = getStoredCall(callId, clientId);
   if (stored) {
@@ -142,7 +149,7 @@ export async function getCallResult(callId, clientId = null) {
         ended_reason: stored.ended_reason,
         summary: stored.summary,
         transcript: stored.transcript,
-        recording_url: stored.recording_url,
+        recording_url: stored.recording_url ? recordingPath(stored.call_id) : null,
         outcome: stored.outcome,
         callback_time: stored.callback_time,
         notes: stored.notes,
@@ -164,7 +171,7 @@ export async function getCallResult(callId, clientId = null) {
       ended_reason: call.endedReason,
       summary: call.summary,
       transcript: call.transcript,
-      recording_url: call.recordingUrl,
+      recording_url: call.recordingUrl ? recordingPath(callId) : null,
       outcome: call.outcome,
       callback_time: call.callbackTime,
       notes: call.notes,

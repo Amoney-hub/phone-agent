@@ -916,6 +916,11 @@ function callRow(call) {
 
   div.innerHTML = head + summary + details;
   div.querySelector(".call-head").onclick = () => { if (hasDetails) div.classList.toggle("open"); };
+  const audio = div.querySelector("audio");
+  if (audio) audio.addEventListener("error", () => {
+    audio.insertAdjacentHTML("afterend", '<span class="text-muted">Recording unavailable.</span>');
+    audio.remove();
+  });
   return div;
 }
 

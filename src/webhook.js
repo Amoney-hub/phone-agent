@@ -51,7 +51,7 @@ import { tiersView, TIER_NAMES } from "./tiers.js";
 import { guardBulkImport, GuardError } from "./guard.js";
 import { classifierConfigured } from "./classify.js";
 import { renderDashboard, renderLogin, renderClient } from "./dashboard.js";
-import { resolveOutcome } from "./vapi.js";
+import { resolveOutcome, getRecordingUrl } from "./vapi.js";
 import {
   isAuthConfigured,
   authenticate,
@@ -162,7 +162,10 @@ function serializeCall(row, role) {
     notes: row.notes,
     summary: row.summary,
     transcript: row.transcript,
-    recording_url: row.recording_url,
+    // The stored URL is Vapi's raw, unplayable R2 link and presigned URLs
+    // expire in minutes. Point playback at our proxy, which fetches a fresh
+    // presigned URL on demand. Null when there's no recording (no empty player).
+    recording_url: row.recording_url ? `/api/calls/${encodeURIComponent(row.call_id)}/recording` : null,
     duration_seconds: row.duration_seconds,
     updated_at: row.updated_at,
   };
@@ -514,6 +517,24 @@ app.get("/api/calls/batch/:batchId", (req, res) => {
     serializeCall(r, principal.role)
   );
   res.json({ batch_id: req.params.batchId, calls });
+});
+
+// Stream a call's recording. Vapi's stored recording URL is a raw, unplayable
+// R2 link and its presigned URLs expire in minutes, so we fetch a FRESH
+// presigned URL on demand and redirect to it. Tenant-scoped; the dashboard's
+// <audio> hits this same-origin so the session cookie authenticates it.
+// Registered before /api/calls/:id (different path depth, but explicit).
+app.get("/api/calls/:id/recording", async (req, res) => {
+  const { clientId } = resolveScope(req);
+  const stored = getStoredCall(req.params.id, clientId);
+  if (!stored) return res.status(404).json({ error: "call not found." });
+  try {
+    const url = await getRecordingUrl(req.params.id);
+    if (!url) return res.status(404).json({ error: "no recording available." });
+    res.redirect(302, url);
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
 });
 
 // Fetch one call's result (tenant-scoped; stored report, else Vapi for admin).
