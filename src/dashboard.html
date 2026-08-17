@@ -3,225 +3,440 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>phone-agent dashboard</title>
+<title>phone-agent</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet" />
 <style>
+  /* ============================ Design tokens ============================ */
   :root {
-    --bg: #0e1116;
-    --panel: #171b22;
-    --panel-2: #1e232c;
-    --border: #2a313c;
-    --text: #e6e9ef;
-    --muted: #98a2b3;
-    --accent: #6ea8fe;
-    --accent-2: #3b82f6;
-    --good: #34d399;
-    --bad: #f87171;
-    --warn: #fbbf24;
+    /* Layered surfaces (near-black) */
+    --surface-page: #0A0B0D;
+    --surface-card: #121417;
+    --surface-input: #1A1D21;
+
+    /* Single electric-blue accent — primary actions & active states ONLY */
+    --accent: #3B82F6;
+    --accent-muted: #1E3A5F;
+    --accent-ring: rgba(59, 130, 246, 0.35);
+    --accent-tint: rgba(59, 130, 246, 0.10);
+
+    /* On-accent text + skeleton shimmer highlight */
+    --on-accent: #FFFFFF;
+    --shimmer: rgba(255, 255, 255, 0.05);
+
+    /* Neutral text ramp */
+    --text-primary: #F5F6F7;
+    --text-secondary: #9BA1A8;
+    --text-muted: #6B7280;
+
+    /* Hairline borders (white at low alpha) */
+    --border: rgba(255, 255, 255, 0.08);
+    --border-strong: rgba(255, 255, 255, 0.14);
+
+    /* Semantic — outcomes only */
+    --booked: #34D399;            /* green  */
+    --callback: #FBBF24;          /* amber  */
+    --not-interested: #F87171;    /* red    */
+    --voicemail: #9BA1A8;         /* gray   */
+    --booked-tint: rgba(52, 211, 153, 0.12);
+    --callback-tint: rgba(251, 191, 36, 0.12);
+    --not-interested-tint: rgba(248, 113, 113, 0.12);
+    --voicemail-tint: rgba(155, 161, 168, 0.12);
+
+    /* Destructive */
+    --danger: #F87171;
+    --danger-tint: rgba(248, 113, 113, 0.10);
+
+    /* Radius */
+    --radius: 12px;
+    --radius-sm: 8px;
+    --radius-pill: 999px;
+
+    /* Spacing (4px scale) */
+    --s-1: 4px;  --s-2: 8px;  --s-3: 12px; --s-4: 16px;
+    --s-5: 20px; --s-6: 24px; --s-8: 32px;
+
+    /* Motion */
+    --t: 150ms ease;
+
+    /* Type */
+    --font-ui: "Geist", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --font-mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+    --sidebar-w: 240px;
   }
+
+  /* ============================== Base ================================== */
   * { box-sizing: border-box; }
+  html, body { height: 100%; }
   body {
     margin: 0;
-    background: var(--bg);
-    color: var(--text);
-    font: 15px/1.5 -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+    background: var(--surface-page);
+    color: var(--text-primary);
+    font-family: var(--font-ui);
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
   }
-  a { color: var(--accent); }
-  header {
-    padding: 20px 24px;
-    border-bottom: 1px solid var(--border);
-    display: flex;
-    align-items: center;
-    gap: 16px;
-    flex-wrap: wrap;
+  .mono { font-family: var(--font-mono); font-feature-settings: "tnum" 1; }
+  .text-secondary { color: var(--text-secondary); }
+  .text-muted { color: var(--text-muted); }
+  .mt-6 { margin-top: var(--s-6); }
+  hr.divider { border: none; border-top: 1px solid var(--border); margin: var(--s-5) 0; }
+  code { font-family: var(--font-mono); color: var(--text-secondary); }
+
+  /* ============================= Layout ================================= */
+  .app { display: flex; min-height: 100vh; }
+
+  .sidebar {
+    position: fixed; inset: 0 auto 0 0;
+    width: var(--sidebar-w);
+    background: var(--surface-card);
+    border-right: 1px solid var(--border);
+    display: flex; flex-direction: column;
+    padding: var(--s-6) var(--s-4);
   }
-  header h1 { font-size: 20px; margin: 0; letter-spacing: .3px; }
-  header h1 .dim { color: var(--muted); font-weight: 400; }
-  .status-strip { display: flex; gap: 10px; margin-left: auto; }
-  .chip {
-    display: inline-flex; align-items: center; gap: 7px;
-    padding: 6px 12px; border-radius: 999px;
-    background: var(--panel-2); border: 1px solid var(--border);
-    font-size: 13px; color: var(--muted);
+  .brand {
+    display: flex; align-items: center; gap: var(--s-2);
+    font-weight: 600; font-size: 15px; letter-spacing: .2px;
+    padding: 0 var(--s-3) var(--s-6);
   }
-  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
-  .dot.on { background: var(--good); box-shadow: 0 0 8px var(--good); }
-  .dot.off { background: var(--bad); }
-  main { max-width: 980px; margin: 0 auto; padding: 24px; }
-  section { margin-bottom: 34px; }
-  section h2 { font-size: 16px; margin: 0 0 14px; color: var(--text); }
-  .panel {
-    background: var(--panel); border: 1px solid var(--border);
-    border-radius: 12px; overflow: hidden;
+  .brand .logo-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted); }
+  .brand .dim { color: var(--text-muted); font-weight: 400; }
+
+  .nav { display: flex; flex-direction: column; gap: var(--s-1); }
+  .nav-item {
+    display: flex; align-items: center; gap: var(--s-3);
+    padding: var(--s-2) var(--s-3);
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    text-decoration: none; cursor: pointer; font-weight: 500;
+    transition: background var(--t), color var(--t);
+    user-select: none;
   }
+  .nav-item:hover { background: var(--surface-input); color: var(--text-primary); }
+  .nav-item.active { background: var(--accent-muted); color: var(--text-primary); }
+  .nav-ico { width: 16px; height: 16px; flex: 0 0 16px; color: currentColor; }
+
+  .sidebar-foot { margin-top: auto; padding-top: var(--s-4); border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: var(--s-3); }
+  .whoami { font-size: 12px; color: var(--text-muted); padding: 0 var(--s-3); }
+
+  .content { margin-left: var(--sidebar-w); flex: 1; min-width: 0; padding: var(--s-8); }
+  .container { max-width: 1040px; }
+
+  .topbar { display: flex; align-items: center; gap: var(--s-4); margin-bottom: var(--s-8); }
+  .topbar h1 { font-size: 22px; font-weight: 600; margin: 0; letter-spacing: -.01em; }
+  .topbar .spacer { margin-left: auto; }
+  .switcher { display: flex; align-items: center; gap: var(--s-2); }
+
+  .view { display: none; }
+  .view.active { display: block; }
+
+  /* ============================= Cards ================================== */
+  .card {
+    background: var(--surface-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: var(--s-6);
+  }
+  .card.pad-0 { padding: 0; }
+  .stack > * + * { margin-top: var(--s-6); }
+
+  .section-title { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--text-muted); font-weight: 600; margin: 0 0 var(--s-4); }
+  .label { font-size: 11px; text-transform: uppercase; letter-spacing: .07em; color: var(--text-muted); font-weight: 600; }
+
+  /* =========================== Results hero ============================= */
+  .hero { padding: var(--s-8); }
+  .hero-value { font-family: var(--font-mono); font-weight: 600; font-size: 60px; line-height: 1; letter-spacing: -.03em; color: var(--text-primary); }
+  .hero-label { margin-top: var(--s-3); color: var(--text-secondary); font-size: 14px; }
+
+  .stats { display: grid; grid-template-columns: repeat(2, 1fr); gap: var(--s-4); }
+  @media (max-width: 720px) { .stats { grid-template-columns: 1fr; } }
+  .stat .label { display: block; }
+  .stat-value { font-family: var(--font-mono); font-size: 28px; font-weight: 600; margin-top: var(--s-2); letter-spacing: -.02em; }
+
+  /* ======================= Outcome breakdown =========================== */
+  .bd-row { display: grid; grid-template-columns: 150px 1fr 48px 84px; align-items: center; gap: var(--s-3); padding: var(--s-2) 0; }
+  .bd-row + .bd-row { border-top: 1px solid var(--border); }
+  .bar { height: 6px; border-radius: var(--radius-pill); background: var(--surface-input); overflow: hidden; }
+  .bar-fill { display: block; height: 100%; border-radius: var(--radius-pill); background: var(--text-muted); transition: width var(--t); }
+  .bar-fill[data-o="booked"] { background: var(--booked); }
+  .bar-fill[data-o="callback_requested"] { background: var(--callback); }
+  .bar-fill[data-o="not_interested"] { background: var(--not-interested); }
+  .bar-fill[data-o="voicemail"] { background: var(--voicemail); }
+  .bd-count { text-align: right; color: var(--text-primary); }
+  .bd-val { text-align: right; color: var(--text-secondary); }
+
+  /* ============================= Forms ================================= */
+  input, select, textarea {
+    font: inherit; color: var(--text-primary);
+    background: var(--surface-input);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: var(--s-2) var(--s-3);
+    transition: border-color var(--t), box-shadow var(--t);
+    min-width: 0;
+  }
+  input::placeholder { color: var(--text-muted); }
+  input:focus, select:focus, textarea:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-ring);
+  }
+  input[readonly] { color: var(--text-secondary); }
+
+  .field { display: flex; flex-direction: column; gap: var(--s-2); }
+  .field > .label { margin: 0; }
+  .form-row { display: flex; gap: var(--s-4); align-items: flex-end; flex-wrap: wrap; }
+  .form-row .field { flex: 1; min-width: 160px; }
+
+  /* ============================ Buttons ================================ */
+  .btn {
+    font: inherit; font-weight: 500; cursor: pointer;
+    border: 1px solid transparent; border-radius: var(--radius-sm);
+    padding: var(--s-2) var(--s-4);
+    display: inline-flex; align-items: center; gap: var(--s-2);
+    transition: background var(--t), border-color var(--t), color var(--t), filter var(--t);
+    white-space: nowrap;
+  }
+  .btn-primary { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+  .btn-primary:hover { filter: brightness(1.08); }
+  .btn-secondary { background: transparent; color: var(--text-primary); border-color: var(--border); }
+  .btn-secondary:hover { border-color: var(--border-strong); background: var(--surface-input); }
+  .btn-danger { background: transparent; color: var(--danger); border-color: transparent; padding: var(--s-2) var(--s-3); }
+  .btn-danger:hover { background: var(--danger-tint); }
+  .btn-sm { padding: var(--s-1) var(--s-3); font-size: 13px; }
+
+  /* ============================ Tables ================================= */
   table { width: 100%; border-collapse: collapse; }
-  th, td { text-align: left; padding: 12px 16px; border-bottom: 1px solid var(--border); }
-  th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .5px; }
-  tr:last-child td { border-bottom: none; }
+  thead th {
+    text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .07em;
+    color: var(--text-muted); font-weight: 600; padding: var(--s-3) var(--s-5);
+    border-bottom: 1px solid var(--border);
+  }
+  tbody td { padding: var(--s-3) var(--s-5); border-bottom: 1px solid var(--border); }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr { transition: background var(--t); }
+  tbody tr:hover { background: var(--surface-input); }
   td.actions { text-align: right; white-space: nowrap; }
-  input, button {
-    font: inherit; color: var(--text);
-  }
-  input[type=text] {
-    background: var(--panel-2); border: 1px solid var(--border);
-    border-radius: 8px; padding: 8px 10px; min-width: 0;
-  }
-  input[type=text]:focus { outline: none; border-color: var(--accent-2); }
-  select {
-    font: inherit; color: var(--text);
-    background: var(--panel-2); border: 1px solid var(--border);
-    border-radius: 8px; padding: 8px 10px;
-  }
-  select:focus { outline: none; border-color: var(--accent-2); }
-  .filter-row {
-    display: flex; align-items: center; gap: 10px;
-    padding: 12px 16px; border-bottom: 1px solid var(--border);
-  }
-  .filter-row #callsCount { margin-left: auto; font-size: 13px; }
-  button {
-    cursor: pointer; border: 1px solid var(--border);
-    background: var(--panel-2); border-radius: 8px; padding: 8px 12px;
-  }
-  button:hover { border-color: var(--accent-2); }
-  button.primary { background: var(--accent-2); border-color: var(--accent-2); color: #fff; }
-  button.danger:hover { border-color: var(--bad); color: var(--bad); }
-  button.link { background: none; border: none; padding: 6px 8px; color: var(--accent); }
-  .add-row { display: flex; gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
-  .add-row input { flex: 1; }
-  .muted { color: var(--muted); }
-  .empty { padding: 20px 16px; color: var(--muted); }
+  td.actions .btn + .btn { margin-left: var(--s-1); }
+
+  /* ============================= Badges ================================ */
   .badge {
-    display: inline-block; padding: 3px 9px; border-radius: 6px;
-    font-size: 12px; font-weight: 600; background: var(--panel-2);
-    border: 1px solid var(--border); color: var(--muted);
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 2px 8px; border-radius: 6px;
+    font-size: 12px; font-weight: 500;
+    color: var(--text-secondary); border: 1px solid var(--border); background: transparent;
   }
-  .badge.ended { color: var(--good); border-color: rgba(52,211,153,.4); }
-  .badge.failed, .badge.busy, .badge.no-answer { color: var(--bad); border-color: rgba(248,113,113,.4); }
-  /* Structured outcome badges. */
-  .badge.outcome { text-transform: none; letter-spacing: 0; }
-  .badge.o-booked, .badge.o-interested { color: var(--good); border-color: rgba(52,211,153,.4); }
-  .badge.o-not_interested { color: var(--bad); border-color: rgba(248,113,113,.4); }
-  .badge.o-voicemail, .badge.o-callback_requested { color: var(--warn); border-color: rgba(251,191,36,.4); }
-  .badge.o-reached { color: var(--accent); border-color: rgba(110,168,254,.4); }
-  .badge.tag { text-transform: none; letter-spacing: 0; color: var(--muted); background: var(--panel-2); }
-  .call {
-    padding: 14px 16px; border-bottom: 1px solid var(--border);
-  }
+  .badge.mono { font-size: 11px; }
+  .badge-outcome[data-o="booked"] { color: var(--booked); background: var(--booked-tint); border-color: var(--booked-tint); }
+  .badge-outcome[data-o="callback_requested"] { color: var(--callback); background: var(--callback-tint); border-color: var(--callback-tint); }
+  .badge-outcome[data-o="not_interested"] { color: var(--not-interested); background: var(--not-interested-tint); border-color: var(--not-interested-tint); }
+  .badge-outcome[data-o="voicemail"] { color: var(--voicemail); background: var(--voicemail-tint); border-color: var(--voicemail-tint); }
+
+  /* ========================= Call history ============================== */
+  .filter-row { display: flex; align-items: center; gap: var(--s-3); padding: var(--s-4) var(--s-5); border-bottom: 1px solid var(--border); }
+  .filter-row .count { margin-left: auto; font-size: 13px; color: var(--text-muted); }
+  .call { padding: var(--s-4) var(--s-5); border-bottom: 1px solid var(--border); }
   .call:last-child { border-bottom: none; }
-  .call-head {
-    display: flex; align-items: center; gap: 12px; cursor: pointer;
-  }
-  .call-head .who { font-weight: 600; }
-  .call-head .meta { color: var(--muted); font-size: 13px; margin-left: auto; display: flex; gap: 14px; }
-  .call-summary { margin: 8px 0 0; color: var(--muted); }
-  .call-meta { margin: 4px 0; font-size: 14px; }
-  .call-meta strong { color: var(--text); }
-  .call-details { display: none; margin-top: 12px; }
-  .call.open .call-details { display: block; }
+  .call-head { display: flex; align-items: center; gap: var(--s-3); cursor: pointer; }
+  .call-head .who { font-weight: 500; }
+  .call-head .meta { color: var(--text-muted); font-size: 13px; margin-left: auto; display: flex; gap: var(--s-4); }
+  .caret { color: var(--text-muted); transition: transform var(--t); display: inline-block; width: 10px; }
   .call.open .caret { transform: rotate(90deg); }
-  .caret { transition: transform .15s; color: var(--muted); }
+  .call-summary { margin: var(--s-2) 0 0; color: var(--text-secondary); }
+  .call-details { display: none; margin-top: var(--s-3); }
+  .call.open .call-details { display: block; }
+  .call-meta { margin: var(--s-1) 0; font-size: 13px; color: var(--text-secondary); }
+  .call-meta strong { color: var(--text-primary); font-weight: 500; }
   pre.transcript {
     white-space: pre-wrap; word-break: break-word;
-    background: var(--panel-2); border: 1px solid var(--border);
-    border-radius: 8px; padding: 12px; margin: 0 0 10px; max-height: 340px; overflow: auto;
-    font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+    background: var(--surface-input); border: 1px solid var(--border);
+    border-radius: var(--radius-sm); padding: var(--s-3); margin: 0 0 var(--s-3);
+    max-height: 340px; overflow: auto;
+    font: 13px/1.6 var(--font-mono); color: var(--text-secondary);
   }
-  audio { width: 100%; margin-top: 4px; }
+  audio { width: 100%; margin-top: var(--s-1); }
+
+  /* ============================ Settings =============================== */
+  .status-row { display: flex; align-items: center; gap: var(--s-3); padding: var(--s-3) 0; }
+  .status-row + .status-row { border-top: 1px solid var(--border); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted); }
+  .dot.on { background: var(--booked); }
+  .status-row .name { font-weight: 500; }
+  .status-row .state { margin-left: auto; color: var(--text-muted); font-size: 13px; }
+
+  /* ============================ Empty ================================== */
+  .empty { padding: var(--s-5); color: var(--text-muted); }
+
+  /* =========================== Skeletons =============================== */
+  .skeleton { position: relative; overflow: hidden; background: var(--surface-input); border-radius: var(--radius-sm); display: inline-block; }
+  .skeleton::after {
+    content: ""; position: absolute; inset: 0; transform: translateX(-100%);
+    background: linear-gradient(90deg, transparent, var(--shimmer), transparent);
+    animation: shimmer 1.2s infinite;
+  }
+  @keyframes shimmer { 100% { transform: translateX(100%); } }
+  .sk-line { height: 12px; border-radius: 6px; }
+  .sk-hero { height: 56px; width: 240px; }
+
+  /* ============================= Toast ================================= */
   .toast {
-    position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
-    background: var(--panel-2); border: 1px solid var(--border);
-    padding: 10px 16px; border-radius: 8px; opacity: 0; transition: opacity .2s;
-    pointer-events: none;
+    position: fixed; bottom: var(--s-6); left: 50%;
+    transform: translateX(-50%) translateY(8px);
+    background: var(--surface-card); border: 1px solid var(--border);
+    color: var(--text-primary);
+    padding: var(--s-3) var(--s-4); border-radius: var(--radius-sm);
+    opacity: 0; transition: opacity var(--t), transform var(--t);
+    pointer-events: none; z-index: 50;
   }
-  .toast.show { opacity: 1; }
-  .toast.err { border-color: var(--bad); color: var(--bad); }
-  select { font: inherit; color: var(--text); background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
-  select:focus { outline: none; border-color: var(--accent-2); }
-  .cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
-  @media (max-width: 680px) { .cards { grid-template-columns: 1fr; } }
-  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; }
-  .card .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .5px; }
-  .card .value { font-size: 30px; font-weight: 700; margin-top: 6px; }
-  .card .value.good { color: var(--good); }
-  .valgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; }
-  .valgrid label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
-  .valgrid input { width: 100%; }
-  .row-gap { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-  .mt { margin-top: 14px; }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  .toast.err { border-color: var(--danger); color: var(--danger); }
+
+  .row-gap { display: flex; gap: var(--s-3); align-items: center; flex-wrap: wrap; }
+  .valgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: var(--s-3); }
 </style>
 </head>
 <body>
-<header>
-  <h1>phone-agent <span class="dim">dashboard</span></h1>
-  <div class="status-strip" id="statusStrip">
-    <label class="chip" style="gap:6px"><span class="muted">Client</span>
-      <select id="clientSwitcher" style="background:transparent;border:none;color:var(--text);font:inherit;outline:none;padding:0"></select>
-    </label>
-    <span class="chip"><span class="dot" id="vapiDot"></span> Vapi</span>
-    <span class="chip"><span class="dot" id="twilioDot"></span> Twilio</span>
-    <button class="chip" id="logoutBtn" title="Sign out" style="cursor:pointer">Log out</button>
-  </div>
-</header>
-
-<main>
-  <section id="resultsSection">
-    <h2>Results <span class="muted" id="resultsScope"></span></h2>
-    <div class="cards">
-      <div class="card"><div class="label">Jobs booked / shifts filled</div><div class="value" id="rJobs">—</div></div>
-      <div class="card"><div class="label">Estimated value</div><div class="value good" id="rValue">—</div></div>
-      <div class="card"><div class="label">Calls made</div><div class="value" id="rCalls">—</div></div>
+<div class="app">
+  <!-- ============================ Sidebar ============================ -->
+  <aside class="sidebar">
+    <div class="brand"><span class="logo-dot"></span> phone-agent</div>
+    <nav class="nav">
+      <a class="nav-item" data-view="overview">
+        <svg class="nav-ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2.5" y="2.5" width="4.5" height="4.5" rx="1"/><rect x="9" y="2.5" width="4.5" height="4.5" rx="1"/><rect x="2.5" y="9" width="4.5" height="4.5" rx="1"/><rect x="9" y="9" width="4.5" height="4.5" rx="1"/></svg>
+        <span>Overview</span>
+      </a>
+      <a class="nav-item" data-view="contacts">
+        <svg class="nav-ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="8" cy="5.5" r="2.5"/><path d="M3.5 13c0-2.2 2-3.6 4.5-3.6s4.5 1.4 4.5 3.6"/></svg>
+        <span>Contacts</span>
+      </a>
+      <a class="nav-item" data-view="calls">
+        <svg class="nav-ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 3.2 6 3l1 2.5-1.4 1a7 7 0 0 0 3.9 3.9l1-1.4 2.5 1 -.2 2.5c-5 .6-9.6-4-9-9z"/></svg>
+        <span>Calls</span>
+      </a>
+      <a class="nav-item" data-view="clients">
+        <svg class="nav-ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="5.5" cy="6" r="2"/><path d="M1.8 12.5c0-1.9 1.6-3 3.7-3"/><circle cx="10.8" cy="6.4" r="1.7"/><path d="M8.6 12.5c.2-1.7 1.5-2.7 3.2-2.7 1.3 0 2.4.6 2.8 2"/></svg>
+        <span>Clients</span>
+      </a>
+      <a class="nav-item" data-view="settings">
+        <svg class="nav-ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M3 5h4M11 5h2"/><circle cx="9" cy="5" r="1.5"/><path d="M3 11h2M9 11h4"/><circle cx="7" cy="11" r="1.5"/></svg>
+        <span>Settings</span>
+      </a>
+    </nav>
+    <div class="sidebar-foot">
+      <div class="whoami" id="whoami"></div>
+      <button class="btn btn-secondary" id="logoutBtn">Log out</button>
     </div>
-  </section>
+  </aside>
 
-  <section id="clientAdminSection">
-    <h2>Client settings</h2>
-    <div class="panel" style="padding:16px">
-      <div id="clientConfig"></div>
-    </div>
-  </section>
-
-  <section id="contactsSection">
-    <h2>Contacts</h2>
-    <div class="panel">
-      <form class="add-row" id="addForm">
-        <input type="text" id="addName" placeholder="Name" autocomplete="off" required />
-        <input type="text" id="addPhone" placeholder="+15551234567" autocomplete="off" required />
-        <button type="submit" class="primary">Add contact</button>
-      </form>
-      <table>
-        <thead><tr><th>Name</th><th>Phone</th><th></th></tr></thead>
-        <tbody id="contactsBody"></tbody>
-      </table>
-      <div class="empty" id="contactsEmpty" hidden>No contacts yet.</div>
-    </div>
-  </section>
-
-  <section id="callsSection">
-    <h2>Call history</h2>
-    <div class="panel">
-      <div class="filter-row">
-        <label for="outcomeFilter" class="muted">Outcome</label>
-        <select id="outcomeFilter">
-          <option value="">All</option>
-          <option value="reached">reached</option>
-          <option value="voicemail">voicemail</option>
-          <option value="not_interested">not_interested</option>
-          <option value="interested">interested</option>
-          <option value="booked">booked</option>
-          <option value="callback_requested">callback_requested</option>
-          <option value="__none">(no outcome)</option>
-        </select>
-        <span class="muted" id="callsCount"></span>
+  <!-- ============================ Content ============================ -->
+  <main class="content">
+    <div class="container">
+      <div class="topbar">
+        <h1 id="viewTitle">Overview</h1>
+        <div class="spacer"></div>
+        <div class="switcher">
+          <span class="label">Client</span>
+          <select id="clientSwitcher" aria-label="Client workspace"></select>
+        </div>
       </div>
-      <div id="callsList"></div>
-      <div class="empty" id="callsEmpty" hidden>No calls recorded yet.</div>
+
+      <!-- ---------------------- Overview ---------------------- -->
+      <section class="view" data-view="overview">
+        <div class="stack">
+          <div class="card hero">
+            <div class="hero-value mono" id="rValue"><span class="skeleton sk-hero"></span></div>
+            <div class="hero-label">Estimated value <span class="text-muted" id="resultsScope"></span></div>
+          </div>
+          <div class="stats">
+            <div class="card stat"><span class="label">Jobs booked / shifts filled</span><div class="stat-value mono" id="rJobs"><span class="skeleton sk-line" style="width:56px"></span></div></div>
+            <div class="card stat"><span class="label">Calls made</span><div class="stat-value mono" id="rCalls"><span class="skeleton sk-line" style="width:56px"></span></div></div>
+          </div>
+          <div class="card">
+            <div class="section-title">Outcome breakdown</div>
+            <div id="breakdownBody"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ---------------------- Contacts ---------------------- -->
+      <section class="view" data-view="contacts">
+        <div class="stack">
+          <div class="card">
+            <div class="section-title">Add contact</div>
+            <form class="form-row" id="addForm">
+              <div class="field"><label class="label" for="addName">Name</label><input type="text" id="addName" placeholder="Jane Doe" autocomplete="off" required /></div>
+              <div class="field"><label class="label" for="addPhone">Phone</label><input type="text" id="addPhone" class="mono" placeholder="+15551234567" autocomplete="off" required /></div>
+              <button type="submit" class="btn btn-primary">Add contact</button>
+            </form>
+          </div>
+          <div class="card pad-0">
+            <table>
+              <thead><tr><th>Name</th><th>Phone</th><th></th></tr></thead>
+              <tbody id="contactsBody"></tbody>
+            </table>
+            <div class="empty" id="contactsEmpty" hidden>No contacts yet.</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ------------------------ Calls ----------------------- -->
+      <section class="view" data-view="calls">
+        <div class="card pad-0">
+          <div class="filter-row">
+            <span class="label">Outcome</span>
+            <select id="outcomeFilter">
+              <option value="">All</option>
+              <option value="reached">reached</option>
+              <option value="voicemail">voicemail</option>
+              <option value="not_interested">not_interested</option>
+              <option value="interested">interested</option>
+              <option value="booked">booked</option>
+              <option value="callback_requested">callback_requested</option>
+              <option value="__none">(no outcome)</option>
+            </select>
+            <span class="count" id="callsCount"></span>
+          </div>
+          <div id="callsList"></div>
+          <div class="empty" id="callsEmpty" hidden>No calls recorded yet.</div>
+        </div>
+      </section>
+
+      <!-- ----------------------- Clients ---------------------- -->
+      <section class="view" data-view="clients">
+        <div class="card">
+          <div class="section-title">Client settings</div>
+          <div id="clientConfig"></div>
+        </div>
+      </section>
+
+      <!-- ---------------------- Settings ---------------------- -->
+      <section class="view" data-view="settings">
+        <div class="stack">
+          <div class="card">
+            <div class="section-title">Integrations</div>
+            <div class="status-row"><span class="dot" id="vapiDot"></span><span class="name">Vapi</span><span class="state" id="vapiState">—</span></div>
+            <div class="status-row"><span class="dot" id="twilioDot"></span><span class="name">Twilio</span><span class="state" id="twilioState">—</span></div>
+          </div>
+          <div class="card">
+            <div class="section-title">Session</div>
+            <div class="text-secondary">Signed in as <strong class="mono" id="settingsUser"></strong></div>
+            <div class="row-gap mt-6"><button class="btn btn-secondary" id="logoutBtn2">Log out</button></div>
+          </div>
+        </div>
+      </section>
     </div>
-  </section>
-</main>
+  </main>
+</div>
 
 <div class="toast" id="toast"></div>
 
 <script>
 const $ = (sel) => document.querySelector(sel);
+const $$ = (sel) => document.querySelectorAll(sel);
 
 function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => (
@@ -245,11 +460,7 @@ async function api(method, url, body) {
     opts.body = JSON.stringify(body);
   }
   const res = await fetch(url, opts);
-  // Session expired or missing — bounce to the login page.
-  if (res.status === 401) {
-    window.location = "/login";
-    throw new Error("Not signed in");
-  }
+  if (res.status === 401) { window.location = "/login"; throw new Error("Not signed in"); }
   const data = res.status === 204 ? null : await res.json().catch(() => ({}));
   if (!res.ok) throw new Error((data && data.error) || ("HTTP " + res.status));
   return data;
@@ -258,8 +469,30 @@ async function api(method, url, body) {
 function fmtDuration(sec) {
   if (sec == null) return "—";
   const m = Math.floor(sec / 60);
-  const s = String(sec % 60).padStart(2, "0");
-  return m + ":" + s;
+  return m + ":" + String(sec % 60).padStart(2, "0");
+}
+
+// --- View router ----------------------------------------------------------
+const VIEW_TITLES = { overview: "Overview", contacts: "Contacts", calls: "Calls", clients: "Clients", settings: "Settings" };
+function showView(name) {
+  if (!VIEW_TITLES[name]) name = "overview";
+  $$(".view").forEach((v) => v.classList.toggle("active", v.dataset.view === name));
+  $$(".nav-item").forEach((a) => a.classList.toggle("active", a.dataset.view === name));
+  $("#viewTitle").textContent = VIEW_TITLES[name];
+  if (location.hash.slice(1) !== name) history.replaceState(null, "", "#" + name);
+}
+$$(".nav-item").forEach((a) => a.addEventListener("click", (e) => { e.preventDefault(); showView(a.dataset.view); }));
+
+// --- Skeletons ------------------------------------------------------------
+function sk(w) { return '<span class="skeleton sk-line" style="width:' + w + '"></span>'; }
+function showSkeletons() {
+  $("#contactsBody").innerHTML = Array.from({ length: 4 }, () =>
+    '<tr><td>' + sk("140px") + '</td><td>' + sk("110px") + '</td><td></td></tr>').join("");
+  $("#callsList").innerHTML = Array.from({ length: 4 }, () =>
+    '<div class="call"><div class="call-head"><span class="caret"></span>' + sk("120px") +
+    '<span class="meta">' + sk("80px") + '</span></div></div>').join("");
+  $("#breakdownBody").innerHTML = Array.from({ length: 4 }, () =>
+    '<div class="bd-row">' + sk("120px") + '<div class="bar"></div>' + sk("30px") + sk("60px") + '</div>').join("");
 }
 
 // --- Multi-tenant scope ---------------------------------------------------
@@ -269,7 +502,6 @@ let CURRENCY = "USD";
 const OUTCOMES = ["reached", "voicemail", "not_interested", "interested", "booked", "callback_requested"];
 const clientById = {};
 
-// Append the selected client scope to a URL (admin only).
 function q(url) {
   if (!SELECTED_CLIENT) return url;
   return url + (url.includes("?") ? "&" : "?") + "client_id=" + encodeURIComponent(SELECTED_CLIENT);
@@ -282,6 +514,8 @@ function money(n) {
 
 async function loadMe() {
   ME = await api("GET", "/api/me");
+  $("#whoami").textContent = ME.username ? "Signed in as " + ME.username : "";
+  $("#settingsUser").textContent = ME.username || "";
   const sw = $("#clientSwitcher");
   sw.innerHTML = "";
   const optAll = document.createElement("option");
@@ -301,23 +535,40 @@ $("#clientSwitcher").addEventListener("change", (e) => {
   refreshAll();
 });
 
+// --- Overview (results) ---------------------------------------------------
 async function loadResults() {
   const r = await api("GET", q("/api/results"));
   CURRENCY = r.currency || "USD";
-  $("#rJobs").textContent = r.jobs_booked;
   $("#rValue").textContent = money(r.estimated_value);
+  $("#rJobs").textContent = r.jobs_booked;
   $("#rCalls").textContent = r.total_calls;
   const name = SELECTED_CLIENT && clientById[SELECTED_CLIENT] ? clientById[SELECTED_CLIENT].name : "all clients";
   $("#resultsScope").textContent = "· " + name;
+  renderBreakdown(r.breakdown || []);
 }
 
+function renderBreakdown(rows) {
+  const max = Math.max(1, ...rows.map((b) => b.count));
+  $("#breakdownBody").innerHTML = rows.map((b) => {
+    const pct = Math.round((b.count / max) * 100);
+    return '<div class="bd-row">' +
+      outcomeBadge(b.outcome) +
+      '<div class="bar"><span class="bar-fill" data-o="' + esc(b.outcome) + '" style="width:' + pct + '%"></span></div>' +
+      '<span class="mono bd-count">' + b.count + '</span>' +
+      '<span class="mono bd-val">' + (b.value ? money(b.value) : "—") + '</span>' +
+    '</div>';
+  }).join("");
+}
+
+// --- Clients (config) -----------------------------------------------------
 function renderClientConfig() {
   const box = $("#clientConfig");
   if (!SELECTED_CLIENT) {
     box.innerHTML =
-      '<div class="muted">Select a client above to edit its per-outcome values and login. Or create one:</div>' +
-      '<form class="row-gap mt" id="newClientForm"><input type="text" id="newClientName" placeholder="New client name" required />' +
-      '<button class="primary" type="submit">Create client</button></form>';
+      '<p class="text-secondary" style="margin-top:0">Select a client in the switcher above to edit its per-outcome values, login, and API key — or create one.</p>' +
+      '<form class="form-row mt-6" id="newClientForm"><div class="field"><label class="label" for="newClientName">New client name</label>' +
+      '<input type="text" id="newClientName" placeholder="Acme Plumbing" required /></div>' +
+      '<button class="btn btn-primary" type="submit">Create client</button></form>';
     $("#newClientForm").onsubmit = async (ev) => {
       ev.preventDefault();
       const name = $("#newClientName").value.trim(); if (!name) return;
@@ -334,27 +585,34 @@ function renderClientConfig() {
   const c = clientById[SELECTED_CLIENT] || { outcome_values: {} };
   const vals = c.outcome_values || {};
   const inputs = OUTCOMES.map((o) =>
-    '<label>' + o + '<input type="number" step="1" min="0" data-outcome="' + o + '" value="' +
-    (vals[o] != null ? esc(vals[o]) : "") + '" placeholder="0" /></label>'
+    '<div class="field"><label class="label">' + o + '</label>' +
+    '<input type="number" step="1" min="0" class="mono" data-outcome="' + o + '" value="' +
+    (vals[o] != null ? esc(vals[o]) : "") + '" placeholder="0" /></div>'
   ).join("");
+  const isDefault = ME && Number(SELECTED_CLIENT) === ME.default_client_id;
   box.innerHTML =
-    '<div class="muted">Per-outcome dollar value for <strong>' + esc(c.name) + '</strong> — drives the estimated value.</div>' +
-    '<div class="valgrid mt" id="valGrid">' + inputs + '</div>' +
-    '<div class="row-gap mt"><button class="primary" id="saveVals">Save values</button></div>' +
-    '<hr style="border-color:var(--border);margin:16px 0" />' +
-    '<div class="muted">Client login' + (c.has_login ? ' — set for user "' + esc(c.username || "") + '".' : ' — not set yet.') +
-    ' Lets this client sign in to their read-only workspace.</div>' +
-    '<form class="row-gap mt" id="loginForm"><input type="text" id="clUser" placeholder="username" value="' + esc(c.username || "") + '" required />' +
-    '<input type="password" id="clPass" placeholder="new password" required />' +
-    '<button class="primary" type="submit">Set login</button></form>' +
-    '<hr style="border-color:var(--border);margin:16px 0" />' +
-    '<div class="muted">Trigger API key — external systems send this as a bearer token to <code>POST /api/trigger/call</code>; calls attribute to this client.</div>' +
-    '<div class="row-gap mt"><input type="text" id="apiKey" readonly value="' + esc(c.api_key || "(none)") + '" style="flex:1;min-width:280px;font-family:ui-monospace,monospace" />' +
-    '<button id="copyKey">Copy</button><button id="regenKey" class="danger">Regenerate</button></div>' +
-    (ME && Number(SELECTED_CLIENT) === ME.default_client_id ? '' :
-      '<hr style="border-color:var(--border);margin:16px 0" />' +
-      '<div class="row-gap"><button id="delClient" class="danger">Delete client</button>' +
-      '<span class="muted">Permanently removes this client and all of its contacts, calls, and results.</span></div>');
+    '<p class="text-secondary" style="margin-top:0">Per-outcome dollar value for <strong>' + esc(c.name) + '</strong> — drives the estimated value.</p>' +
+    '<div class="valgrid" style="margin-top:var(--s-4)" id="valGrid">' + inputs + '</div>' +
+    '<div class="row-gap" style="margin-top:var(--s-4)"><button class="btn btn-primary" id="saveVals">Save values</button></div>' +
+    '<hr class="divider" />' +
+    '<div class="section-title">Client login</div>' +
+    '<p class="text-secondary" style="margin-top:0">' + (c.has_login ? 'Set for user "' + esc(c.username || "") + '".' : 'Not set yet.') +
+    ' Lets this client sign in to their read-only workspace.</p>' +
+    '<form class="form-row mt-6" id="loginForm"><div class="field"><label class="label" for="clUser">Username</label>' +
+    '<input type="text" id="clUser" value="' + esc(c.username || "") + '" required /></div>' +
+    '<div class="field"><label class="label" for="clPass">New password</label><input type="password" id="clPass" required /></div>' +
+    '<button class="btn btn-primary" type="submit">Set login</button></form>' +
+    '<hr class="divider" />' +
+    '<div class="section-title">Trigger API key</div>' +
+    '<p class="text-secondary" style="margin-top:0">External systems send this as a bearer token to <code>POST /api/trigger/call</code>; calls attribute to this client.</p>' +
+    '<div class="row-gap mt-6"><input type="text" id="apiKey" class="mono" readonly value="' + esc(c.api_key || "(none)") + '" style="flex:1;min-width:280px" />' +
+    '<button class="btn btn-secondary" id="copyKey">Copy</button><button class="btn btn-danger" id="regenKey">Regenerate</button></div>' +
+    (isDefault ? '' :
+      '<hr class="divider" />' +
+      '<div class="section-title">Danger zone</div>' +
+      '<div class="row-gap"><button class="btn btn-danger" id="delClient">Delete client</button>' +
+      '<span class="text-muted">Permanently removes this client and all of its contacts, calls, and results.</span></div>');
+
   $("#saveVals").onclick = async () => {
     const outcome_values = {};
     box.querySelectorAll("#valGrid input").forEach((el) => {
@@ -409,19 +667,17 @@ async function refreshAll() {
   renderClientConfig();
 }
 
-// --- Status ---------------------------------------------------------------
+// --- Settings (status) ----------------------------------------------------
 async function loadStatus() {
   try {
     const s = await api("GET", "/api/status");
-    setDot("#vapiDot", s.vapi);
-    setDot("#twilioDot", s.twilio);
+    setDot("#vapiDot", "#vapiState", s.vapi);
+    setDot("#twilioDot", "#twilioState", s.twilio);
   } catch (e) { /* leave neutral */ }
 }
-function setDot(sel, on) {
-  const d = $(sel);
-  d.classList.remove("on", "off");
-  d.classList.add(on ? "on" : "off");
-  d.parentElement.title = on ? "Configured" : "Not configured";
+function setDot(dotSel, stateSel, on) {
+  $(dotSel).classList.toggle("on", !!on);
+  $(stateSel).textContent = on ? "Connected" : "Not configured";
 }
 
 // --- Contacts -------------------------------------------------------------
@@ -437,11 +693,11 @@ function contactRow(c) {
   const tr = document.createElement("tr");
   tr.dataset.id = c.id;
   tr.innerHTML =
-    '<td class="c-name">' + esc(c.name) + '</td>' +
-    '<td class="c-phone">' + esc(c.phone) + '</td>' +
+    '<td>' + esc(c.name) + '</td>' +
+    '<td class="mono text-secondary">' + esc(c.phone) + '</td>' +
     '<td class="actions">' +
-      '<button class="link edit">Edit</button>' +
-      '<button class="link danger del">Delete</button>' +
+      '<button class="btn btn-secondary btn-sm edit">Edit</button>' +
+      '<button class="btn btn-danger btn-sm del">Delete</button>' +
     '</td>';
   tr.querySelector(".edit").onclick = () => startEdit(tr, c);
   tr.querySelector(".del").onclick = () => removeContact(c);
@@ -451,10 +707,10 @@ function contactRow(c) {
 function startEdit(tr, c) {
   tr.innerHTML =
     '<td><input type="text" class="e-name" value="' + esc(c.name) + '"></td>' +
-    '<td><input type="text" class="e-phone" value="' + esc(c.phone) + '"></td>' +
+    '<td><input type="text" class="e-phone mono" value="' + esc(c.phone) + '"></td>' +
     '<td class="actions">' +
-      '<button class="link save">Save</button>' +
-      '<button class="link cancel">Cancel</button>' +
+      '<button class="btn btn-primary btn-sm save">Save</button>' +
+      '<button class="btn btn-secondary btn-sm cancel">Cancel</button>' +
     '</td>';
   tr.querySelector(".save").onclick = async () => {
     const name = tr.querySelector(".e-name").value.trim();
@@ -521,29 +777,27 @@ function renderCalls() {
 $("#outcomeFilter").addEventListener("change", renderCalls);
 
 function statusBadge(status) {
-  const cls = String(status || "").toLowerCase().replace(/[^a-z-]/g, "-");
-  return '<span class="badge ' + esc(cls) + '">' + esc(status || "unknown") + '</span>';
+  if (!status) return '<span class="badge">unknown</span>';
+  return '<span class="badge">' + esc(status) + '</span>';
 }
 
 function outcomeBadge(outcome) {
   if (!outcome) return "";
-  const cls = "o-" + String(outcome).toLowerCase().replace(/[^a-z_]/g, "");
-  return '<span class="badge outcome ' + esc(cls) + '">' + esc(outcome) + '</span>';
+  return '<span class="badge badge-outcome" data-o="' + esc(outcome) + '">' + esc(String(outcome).replace(/_/g, " ")) + '</span>';
 }
 
 function tagBadge(tag) {
   if (!tag) return "";
-  return '<span class="badge tag" title="Source tag">🏷 ' + esc(tag) + '</span>';
+  return '<span class="badge mono" title="Source tag">' + esc(tag) + '</span>';
 }
 
 function callRow(call) {
   const div = document.createElement("div");
   div.className = "call";
   const who = call.contact_name || call.customer_number || "Unknown";
-  const hasDetails =
-    call.transcript || call.recording_url || call.callback_time || call.notes;
+  const hasDetails = call.transcript || call.recording_url || call.callback_time || call.notes;
 
-  let head =
+  const head =
     '<div class="call-head">' +
       '<span class="caret">' + (hasDetails ? "▶" : "") + '</span>' +
       '<span class="who">' + esc(who) + '</span>' +
@@ -551,48 +805,40 @@ function callRow(call) {
       outcomeBadge(call.outcome) +
       tagBadge(call.source_tag) +
       '<span class="meta">' +
-        '<span>⏱ ' + fmtDuration(call.duration_seconds) + '</span>' +
-        '<span>' + esc((call.updated_at || "").replace("T", " ")) + '</span>' +
+        '<span class="mono">' + fmtDuration(call.duration_seconds) + '</span>' +
+        '<span class="mono">' + esc((call.updated_at || "").replace("T", " ")) + '</span>' +
       '</span>' +
     '</div>';
 
-  let summary = call.summary
+  const summary = call.summary
     ? '<p class="call-summary">' + esc(call.summary) + '</p>'
-    : '<p class="call-summary muted">No summary.</p>';
+    : '<p class="call-summary text-muted">No summary.</p>';
 
   let details = '<div class="call-details">';
-  if (call.callback_time) {
-    details += '<p class="call-meta"><strong>Callback:</strong> ' + esc(call.callback_time) + '</p>';
-  }
-  if (call.notes) {
-    details += '<p class="call-meta"><strong>Notes:</strong> ' + esc(call.notes) + '</p>';
-  }
-  if (call.transcript) {
-    details += '<pre class="transcript">' + esc(call.transcript) + '</pre>';
-  }
-  if (call.recording_url) {
-    details += '<audio controls preload="none" src="' + esc(call.recording_url) + '"></audio>';
-  }
-  if (!call.transcript && !call.recording_url && !call.callback_time && !call.notes) {
-    details += '<span class="muted">No transcript or recording.</span>';
-  }
+  if (call.callback_time) details += '<p class="call-meta"><strong>Callback:</strong> ' + esc(call.callback_time) + '</p>';
+  if (call.notes) details += '<p class="call-meta"><strong>Notes:</strong> ' + esc(call.notes) + '</p>';
+  if (call.transcript) details += '<pre class="transcript">' + esc(call.transcript) + '</pre>';
+  if (call.recording_url) details += '<audio controls preload="none" src="' + esc(call.recording_url) + '"></audio>';
+  if (!hasDetails) details += '<span class="text-muted">No transcript or recording.</span>';
   details += '</div>';
 
   div.innerHTML = head + summary + details;
-  div.querySelector(".call-head").onclick = () => {
-    if (hasDetails) div.classList.toggle("open");
-  };
+  div.querySelector(".call-head").onclick = () => { if (hasDetails) div.classList.toggle("open"); };
   return div;
 }
 
 // --- Logout ---------------------------------------------------------------
-$("#logoutBtn").addEventListener("click", async () => {
+async function logout() {
   try { await fetch("/logout", { method: "POST" }); } catch (e) { /* ignore */ }
   window.location = "/login";
-});
+}
+$("#logoutBtn").addEventListener("click", logout);
+$("#logoutBtn2").addEventListener("click", logout);
 
 // --- Boot -----------------------------------------------------------------
 async function boot() {
+  showView(location.hash.slice(1) || "overview");
+  showSkeletons();
   await loadMe().catch((e) => toast(e.message, true));
   await Promise.all([
     loadStatus(),
