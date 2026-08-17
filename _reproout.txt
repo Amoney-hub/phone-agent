@@ -1,0 +1,9 @@
+=== BUG 1: refresh while on #clients ===
+switcher options: ["All clients","bb"]
+clientConfig shows: CREATE empty state (selection lost)
+
+=== BUG 2: select client, submit login ===
+login form present: true | onsubmit bound: true
+submit defaultPrevented: true
+PUT login called: true
+fetch log: ["GET /api/me","GET /api/status","GET /api/results","GET /api/contacts","GET /api/calls","GET /api/results?client_id=2","GET /api/contacts?client_id=2","GET /api/calls?client_id=2","PUT /api/clients/2/login"]

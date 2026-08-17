@@ -482,6 +482,7 @@ function showView(name) {
   if (location.hash.slice(1) !== name) history.replaceState(null, "", "#" + name);
 }
 $$(".nav-item").forEach((a) => a.addEventListener("click", (e) => { e.preventDefault(); showView(a.dataset.view); }));
+window.addEventListener("hashchange", () => showView(location.hash.slice(1) || "overview"));
 
 // --- Skeletons ------------------------------------------------------------
 function sk(w) { return '<span class="skeleton sk-line" style="width:' + w + '"></span>'; }
@@ -497,10 +498,16 @@ function showSkeletons() {
 
 // --- Multi-tenant scope ---------------------------------------------------
 let ME = null;
-let SELECTED_CLIENT = "";        // "" = all clients
+// Persist the selected client across refreshes so scope/state isn't lost.
+let SELECTED_CLIENT = (() => { try { return localStorage.getItem("pa_client") || ""; } catch { return ""; } })();
 let CURRENCY = "USD";
 const OUTCOMES = ["reached", "voicemail", "not_interested", "interested", "booked", "callback_requested"];
 const clientById = {};
+
+function setSelectedClient(v) {
+  SELECTED_CLIENT = v || "";
+  try { localStorage.setItem("pa_client", SELECTED_CLIENT); } catch {}
+}
 
 function q(url) {
   if (!SELECTED_CLIENT) return url;
@@ -527,11 +534,14 @@ async function loadMe() {
     o.value = String(c.id); o.textContent = c.name;
     sw.appendChild(o);
   }
+  // Drop a stale selection (e.g. a deleted client) rather than silently
+  // falling back to "all clients".
+  if (SELECTED_CLIENT && !clientById[SELECTED_CLIENT]) setSelectedClient("");
   sw.value = SELECTED_CLIENT;
 }
 
 $("#clientSwitcher").addEventListener("change", (e) => {
-  SELECTED_CLIENT = e.target.value;
+  setSelectedClient(e.target.value);
   refreshAll();
 });
 
@@ -567,19 +577,8 @@ function renderClientConfig() {
     box.innerHTML =
       '<p class="text-secondary" style="margin-top:0">Select a client in the switcher above to edit its per-outcome values, login, and API key — or create one.</p>' +
       '<form class="form-row mt-6" id="newClientForm"><div class="field"><label class="label" for="newClientName">New client name</label>' +
-      '<input type="text" id="newClientName" placeholder="Acme Plumbing" required /></div>' +
+      '<input type="text" id="newClientName" placeholder="Acme Plumbing" /></div>' +
       '<button class="btn btn-primary" type="submit">Create client</button></form>';
-    $("#newClientForm").onsubmit = async (ev) => {
-      ev.preventDefault();
-      const name = $("#newClientName").value.trim(); if (!name) return;
-      try {
-        const c = await api("POST", "/api/clients", { name });
-        toast("Client created");
-        await loadMe();
-        SELECTED_CLIENT = String(c.id); $("#clientSwitcher").value = SELECTED_CLIENT;
-        refreshAll();
-      } catch (e) { toast(e.message, true); }
-    };
     return;
   }
   const c = clientById[SELECTED_CLIENT] || { outcome_values: {} };
@@ -599,8 +598,8 @@ function renderClientConfig() {
     '<p class="text-secondary" style="margin-top:0">' + (c.has_login ? 'Set for user "' + esc(c.username || "") + '".' : 'Not set yet.') +
     ' Lets this client sign in to their read-only workspace.</p>' +
     '<form class="form-row mt-6" id="loginForm"><div class="field"><label class="label" for="clUser">Username</label>' +
-    '<input type="text" id="clUser" value="' + esc(c.username || "") + '" required /></div>' +
-    '<div class="field"><label class="label" for="clPass">New password</label><input type="password" id="clPass" required /></div>' +
+    '<input type="text" id="clUser" autocomplete="off" value="' + esc(c.username || "") + '" /></div>' +
+    '<div class="field"><label class="label" for="clPass">New password</label><input type="password" id="clPass" autocomplete="new-password" /></div>' +
     '<button class="btn btn-primary" type="submit">Set login</button></form>' +
     '<hr class="divider" />' +
     '<div class="section-title">Trigger API key</div>' +
@@ -623,14 +622,6 @@ function renderClientConfig() {
       toast("Values saved"); loadResults();
     } catch (e) { toast(e.message, true); }
   };
-  $("#loginForm").onsubmit = async (ev) => {
-    ev.preventDefault();
-    const username = $("#clUser").value.trim(); const password = $("#clPass").value;
-    try {
-      clientById[SELECTED_CLIENT] = await api("PUT", "/api/clients/" + SELECTED_CLIENT + "/login", { username, password });
-      toast("Login set"); renderClientConfig();
-    } catch (e) { toast(e.message, true); }
-  };
   $("#copyKey").onclick = () => {
     const v = $("#apiKey").value;
     if (navigator.clipboard) navigator.clipboard.writeText(v).then(() => toast("Key copied")).catch(() => {});
@@ -650,7 +641,7 @@ function renderClientConfig() {
       await api("DELETE", "/api/clients/" + SELECTED_CLIENT);
       toast("Client deleted");
       delete clientById[SELECTED_CLIENT];
-      SELECTED_CLIENT = "";
+      setSelectedClient("");
       await loadMe();
       $("#clientSwitcher").value = "";
       refreshAll();
@@ -734,18 +725,53 @@ async function removeContact(c) {
   } catch (e) { toast(e.message, true); }
 }
 
-$("#addForm").addEventListener("submit", async (ev) => {
-  ev.preventDefault();
+// --- Form handlers ---------------------------------------------------------
+// All forms submit through ONE delegated listener that always preventDefaults,
+// so a native form submit (page reload) can never happen — even across the
+// client-config re-renders.
+async function handleAddContact() {
   const name = $("#addName").value.trim();
   const phone = $("#addPhone").value.trim();
-  if (!name || !phone) return;
+  if (!name || !phone) { toast("Name and phone are required.", true); return; }
   try {
     await api("POST", q("/api/contacts"), { name, phone });
-    $("#addName").value = "";
-    $("#addPhone").value = "";
+    $("#addName").value = ""; $("#addPhone").value = "";
     toast("Contact added");
     loadContacts();
   } catch (e) { toast(e.message, true); }
+}
+
+async function handleCreateClient() {
+  const name = $("#newClientName").value.trim();
+  if (!name) { toast("Client name is required.", true); return; }
+  try {
+    const c = await api("POST", "/api/clients", { name });
+    toast("Client created");
+    await loadMe();
+    setSelectedClient(String(c.id));
+    $("#clientSwitcher").value = SELECTED_CLIENT;
+    refreshAll();
+  } catch (e) { toast(e.message, true); }
+}
+
+async function handleSetLogin() {
+  const username = $("#clUser").value.trim();
+  const password = $("#clPass").value;
+  if (!username || !password) { toast("Username and password are required.", true); return; }
+  try {
+    clientById[SELECTED_CLIENT] = await api("PUT", "/api/clients/" + SELECTED_CLIENT + "/login", { username, password });
+    toast('Login set — this client can sign in as "' + username + '".');
+    renderClientConfig();
+  } catch (e) { toast(e.message, true); }
+}
+
+document.addEventListener("submit", (ev) => {
+  const id = ev.target && ev.target.id;
+  if (id !== "addForm" && id !== "newClientForm" && id !== "loginForm") return;
+  ev.preventDefault();
+  if (id === "addForm") handleAddContact();
+  else if (id === "newClientForm") handleCreateClient();
+  else handleSetLogin();
 });
 
 // --- Calls ----------------------------------------------------------------
