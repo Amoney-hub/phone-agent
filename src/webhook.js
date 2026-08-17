@@ -469,6 +469,13 @@ app.post("/api/calls", requireAdmin, async (req, res) => {
       voicemailMessage: voicemail_message,
       clientId: target.id,
     });
+    if (result && result.needs_info) {
+      return res.status(422).json({
+        needs_info: true,
+        missing: result.missing,
+        error: "The objective is missing information the callee will ask for.",
+      });
+    }
     res.status(201).json({ ...result, client_id: target.id });
   } catch (err) {
     res.status(statusForError(err)).json({ error: err.message });

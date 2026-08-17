@@ -15,10 +15,30 @@ contacts, send text messages, and place autonomous phone calls.
 | --- | --- | --- |
 | `add_contact` | `name`, `phone`, *(optional)* `client` | Add or update a contact. `phone` should be E.164, e.g. `+15551234567`. |
 | `send_text` | `name`, `message`, *(optional)* `client` | Send an SMS to a saved contact via Twilio. |
-| `make_call` | `name`, `objective`, *(optional)* `voicemail_message`, `client` | Place a Vapi call to a saved contact. Returns a `call_id`. |
+| `make_call` | `name`, `objective`, *(optional)* `voicemail_message`, `client` | Place a Vapi call to a saved contact. Checks the objective for completeness first (see below). Returns a `call_id`, or a `needs_info` response. |
 | `call_list` | `names[]`, `objective`, *(optional)* `voicemail_message`, `client` | Place calls to several contacts with the same objective, staggered a few seconds apart. Returns a `batch_id` and a table of names/`call_id`s. |
 | `get_call_result` | `call_id` | Fetch a call's status, structured outcome, transcript, and summary. |
 | `get_batch_result` | `batch_id` | Fetch the outcome of every call in a batch placed by `call_list`. |
+
+### Pre-call requirement checking
+
+Before `make_call` dials, the objective is run through an LLM (Anthropic Claude
+Haiku) that predicts what the person being called will **predictably ask for** —
+the caller's name, a callback number, an address, specific dates/times, party
+size, budget, vehicle/part details, an account number, etc. — and checks whether
+each is already in the objective. Since the assistant can only answer with facts
+in the objective, this stops calls that would stall on a question it can't answer.
+
+If anything is missing, **the call is not placed**. Instead you get a structured
+`needs_info` response listing the specific missing fields as questions, so the
+calling client can ask the user and retry with a complete objective:
+
+- **MCP `make_call`** returns a `needs_info:` message with numbered questions.
+- **`POST /api/calls`** returns `422 { "needs_info": true, "missing": [{ "field", "question" }] }`.
+
+The call only dials once the objective is complete. This requires
+`ANTHROPIC_API_KEY`; without it the check is skipped (fail-open) and calls go
+through as before.
 
 ### Voicemail handling
 
@@ -429,6 +449,7 @@ src/
   auth.js     Session auth (admin + client roles, bcrypt), scoping + bearer guard
   tiers.js    Account tiers + per-tier limits/capabilities
   classify.js LLM objective classifier (Claude Haiku) + heuristic fallback
+  requirements.js Pre-call requirement check (needs_info) for make_call
   guard.js    Abuse guard: classification, rate limits, review flagging, detection
   trigger.js  Inbound trigger endpoint: bearer auth, rate limit, out-of-hours queue
   callhours.js   Business-hours window parsing + timezone evaluation

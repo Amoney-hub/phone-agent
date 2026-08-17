@@ -142,13 +142,13 @@ server.registerTool(
   {
     title: "Make Phone Call",
     description:
-      "Place an AI phone call to a saved contact via Vapi. A transient assistant is built from the objective. Voicemail is detected automatically and a short message is left. Returns a call_id to check later with get_call_result.",
+      "Place an AI phone call to a saved contact via Vapi. A transient assistant is built from the objective. The objective is first checked for completeness: if the person being called will predictably need details that aren't in the objective (callback number, address, dates/times, party size, etc.), the call is NOT placed and a needs_info response lists the missing questions — ask the user, then retry with a complete objective. Voicemail is detected automatically. Returns a call_id to check later with get_call_result.",
     inputSchema: {
       name: z.string().min(1).describe("Name of a saved contact."),
       objective: z
         .string()
         .min(1)
-        .describe("Plain-language goal for the call, e.g. 'Book a table for 2 at 7pm'."),
+        .describe("Plain-language goal for the call. Include every detail the callee may ask for (callback number, address, dates/times, party size, budget, etc.), e.g. 'Book a table for 2 at 7pm on Friday under the name Alex, callback 555-0100'."),
       voicemail_message: z
         .string()
         .min(1)
@@ -162,6 +162,15 @@ server.registerTool(
   async ({ name, objective, voicemail_message, client }) => {
     try {
       const r = await backend.placeCall(name, objective, voicemail_message, client);
+      if (r && r.needs_info) {
+        const questions = (r.missing || [])
+          .map((m, i) => `${i + 1}. ${m.question}`)
+          .join("\n");
+        return textResult(
+          `needs_info: the call was NOT placed. The objective is missing details the person being called will likely ask for.\n\n` +
+            `Ask the user these questions, then call make_call again with a complete objective:\n${questions}`
+        );
+      }
       return textResult(
         `Calling ${r.contact.name} (${r.contact.phone}).\ncall_id: ${r.call_id}\nstatus: ${r.status}\nUse get_call_result with this call_id to fetch the transcript and summary once the call ends.`
       );

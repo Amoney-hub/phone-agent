@@ -34,6 +34,9 @@ async function apiRequest(method, path, body) {
   }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
+    // A needs_info response (incomplete objective) is a normal outcome, not an
+    // error — pass it through so make_call handles it the same as in local mode.
+    if (data && data.needs_info) return data;
     const detail = (data && data.error) || `HTTP ${res.status}`;
     throw new Error(`Hosted API ${method} ${path} failed: ${detail}`);
   }

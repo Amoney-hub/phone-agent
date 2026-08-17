@@ -19,6 +19,7 @@ import {
   reviewStatusFor,
   runAbuseDetection,
 } from "./guard.js";
+import { checkObjectiveRequirements } from "./requirements.js";
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -40,8 +41,16 @@ function resolveContact(name, clientId) {
  */
 export async function placeCall({ name, objective, voicemailMessage, clientId = DEFAULT_CLIENT_ID }) {
   const contact = resolveContact(name, clientId);
-  // Abuse guard: capability + objective classification, then per-call rate.
+  // Abuse guard: capability + objective classification.
   const { objectiveNorm } = await guardObjectiveAndCapability({ clientId, objective, kind: "single" });
+
+  // Pre-call requirement check: don't dial if the objective is missing details
+  // the callee will predictably ask for — return the questions instead.
+  const req = await checkObjectiveRequirements(objective);
+  if (!req.complete) {
+    return { needs_info: true, missing: req.missing };
+  }
+
   guardRate({ clientId, phone: contact.phone });
   const reviewStatus = reviewStatusFor(clientId);
 
