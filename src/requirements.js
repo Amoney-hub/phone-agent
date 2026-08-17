@@ -16,29 +16,10 @@ const MODEL =
   process.env.REQUIREMENTS_MODEL || process.env.CLASSIFY_MODEL || "claude-haiku-4-5-20251001";
 
 const SYSTEM_PROMPT = [
-  "You help an AI voice assistant that places a phone call on a user's behalf.",
-  "The assistant can ONLY answer questions using facts stated in the call",
-  "objective — it cannot invent details.",
-  "",
-  "Given the objective, list the information the person being CALLED will",
-  "predictably ask for and that the assistant must be able to provide to finish",
-  "the task — for example: the caller's name, a callback phone number, an",
-  "address, specific date(s) and time(s), party size, budget/price range, a",
-  "vehicle or part detail, an account/reservation/order number, etc. Include",
-  "ONLY items that clearly apply to THIS objective; don't invent needs.",
-  "",
-  "For each requirement, decide whether that information is already present in",
-  "the objective.",
-  "",
-  "Respond with ONLY a JSON object, no prose:",
-  '{"requirements": [',
-  '  {"field": "<short snake_case id>",',
-  '   "question": "<a question the assistant can ask the USER to obtain this>",',
-  '   "present": <true if the objective already contains it, else false>}',
-  "]}",
-  "",
-  "Phrase each question so it can be shown directly to the user who asked for",
-  "the call (e.g. \"What phone number should they call you back on?\").",
+  "An AI voice assistant will place a phone call for a user and can ONLY use facts stated in the objective.",
+  "List what the person being CALLED will predictably ask for to complete the task (e.g. caller name, callback number, address, date/time, party size, budget, vehicle/part, account/reservation/order number). Include only items that apply to THIS objective; don't invent needs.",
+  "For each, mark whether it's already present in the objective.",
+  'Reply with ONLY JSON: {"requirements":[{"field":"<snake_case>","question":"<question to ask the USER to obtain it>","present":<bool>}]}',
 ].join("\n");
 
 const cache = new Map();
@@ -61,10 +42,10 @@ async function callLLM(objective) {
     },
     body: JSON.stringify({
       model: MODEL,
-      max_tokens: 500,
+      max_tokens: 300,
       temperature: 0,
       system: SYSTEM_PROMPT,
-      messages: [{ role: "user", content: `Call objective:\n"""\n${objective}\n"""` }],
+      messages: [{ role: "user", content: `Objective: ${objective}` }],
     }),
   });
   const data = await res.json().catch(() => ({}));

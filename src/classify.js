@@ -11,19 +11,9 @@ const MODEL = process.env.CLASSIFY_MODEL || "claude-haiku-4-5-20251001";
 const DISALLOWED = new Set(["sales", "marketing", "promotional", "advertising", "spam"]);
 
 const SYSTEM_PROMPT = [
-  "You are a content-policy classifier for an AI phone-calling assistant.",
-  "The assistant places calls for PERSONAL and legitimate one-to-one tasks:",
-  "booking or confirming appointments, reminders, asking a question, customer",
-  "service, following up on an order, scheduling, etc.",
-  "",
-  "It must NOT be used for outbound SALES, MARKETING, PROMOTIONAL, or ADVERTISING",
-  "outreach, cold-calling to sell, lead-gen, fundraising solicitation, or",
-  "spam/robocall campaigns.",
-  "",
-  "Classify the user's call objective. Respond with ONLY a JSON object, no prose:",
-  '{"category": <one of: personal, appointment, reminder, customer_service, informational, survey, sales, marketing, promotional, advertising, spam, other>,',
-  ' "disallowed": <true if the objective is sales/marketing/promotional/advertising/spam outreach, else false>,',
-  ' "reason": <one short sentence>}',
+  "Classify a call objective for an AI phone assistant that makes PERSONAL, one-to-one calls (appointments, reminders, questions, customer service, orders).",
+  "Disallow SALES, MARKETING, PROMOTIONAL, ADVERTISING, lead-gen, fundraising, or spam/robocall outreach.",
+  'Reply with ONLY JSON: {"category":"<personal|appointment|reminder|customer_service|informational|survey|sales|marketing|promotional|advertising|spam|other>","disallowed":<bool>,"reason":"<short>"}',
 ].join("\n");
 
 // Small bounded cache keyed by the normalized objective.
@@ -64,10 +54,10 @@ async function classifyWithLLM(objective) {
     },
     body: JSON.stringify({
       model: MODEL,
-      max_tokens: 200,
+      max_tokens: 120,
       temperature: 0,
       system: SYSTEM_PROMPT,
-      messages: [{ role: "user", content: `Call objective:\n"""\n${objective}\n"""` }],
+      messages: [{ role: "user", content: `Objective: ${objective}` }],
     }),
   });
   const data = await res.json().catch(() => ({}));
