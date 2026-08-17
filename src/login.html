@@ -4,57 +4,81 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>phone-agent · sign in</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet" />
 <style>
   :root {
-    --bg: #0e1116;
-    --panel: #171b22;
-    --panel-2: #1e232c;
-    --border: #2a313c;
-    --text: #e6e9ef;
-    --muted: #98a2b3;
-    --accent-2: #3b82f6;
-    --bad: #f87171;
+    --surface-page: #0A0B0D;
+    --surface-card: #121417;
+    --surface-input: #1A1D21;
+    --accent: #3B82F6;
+    --accent-ring: rgba(59, 130, 246, 0.35);
+    --on-accent: #FFFFFF;
+    --text-primary: #F5F6F7;
+    --text-secondary: #9BA1A8;
+    --text-muted: #6B7280;
+    --border: rgba(255, 255, 255, 0.08);
+    --border-strong: rgba(255, 255, 255, 0.14);
+    --danger: #F87171;
+    --radius: 12px;
+    --radius-sm: 8px;
+    --s-2: 8px; --s-3: 12px; --s-4: 16px; --s-6: 24px; --s-8: 32px;
+    --t: 150ms ease;
+    --font-ui: "Geist", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --font-mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
   }
   * { box-sizing: border-box; }
   body {
     margin: 0; min-height: 100vh;
-    background: var(--bg); color: var(--text);
-    font: 15px/1.5 -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
-    display: flex; align-items: center; justify-content: center;
+    background: var(--surface-page); color: var(--text-primary);
+    font-family: var(--font-ui); font-size: 14px; line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    display: flex; align-items: center; justify-content: center; padding: var(--s-6);
   }
   .card {
-    background: var(--panel); border: 1px solid var(--border);
-    border-radius: 14px; padding: 28px; width: 340px; max-width: 92vw;
+    background: var(--surface-card); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: var(--s-8);
+    width: 360px; max-width: 100%;
   }
-  h1 { font-size: 20px; margin: 0 0 4px; letter-spacing: .3px; }
-  h1 .dim { color: var(--muted); font-weight: 400; }
-  p.sub { color: var(--muted); margin: 0 0 20px; font-size: 14px; }
-  label { display: block; font-size: 13px; color: var(--muted); margin: 14px 0 6px; }
+  .brand { display: flex; align-items: center; gap: var(--s-2); font-weight: 600; font-size: 14px; color: var(--text-secondary); }
+  .brand .logo-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted); }
+  h1 { font-size: 22px; font-weight: 600; margin: var(--s-4) 0 var(--s-2); letter-spacing: -.01em; }
+  p.sub { color: var(--text-secondary); margin: 0 0 var(--s-6); font-size: 14px; }
+  .field { display: flex; flex-direction: column; gap: var(--s-2); margin-top: var(--s-4); }
+  label { font-size: 11px; text-transform: uppercase; letter-spacing: .07em; color: var(--text-muted); font-weight: 600; }
   input {
-    width: 100%; font: inherit; color: var(--text);
-    background: var(--panel-2); border: 1px solid var(--border);
-    border-radius: 8px; padding: 10px 12px;
+    width: 100%; font: inherit; color: var(--text-primary);
+    background: var(--surface-input); border: 1px solid var(--border);
+    border-radius: var(--radius-sm); padding: var(--s-3);
+    transition: border-color var(--t), box-shadow var(--t);
   }
-  input:focus { outline: none; border-color: var(--accent-2); }
+  input::placeholder { color: var(--text-muted); }
+  input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-ring); }
   button {
-    width: 100%; margin-top: 20px; cursor: pointer;
-    font: inherit; color: #fff; background: var(--accent-2);
-    border: 1px solid var(--accent-2); border-radius: 8px; padding: 10px 12px;
+    width: 100%; margin-top: var(--s-6); cursor: pointer; font: inherit; font-weight: 500;
+    color: var(--on-accent); background: var(--accent); border: 1px solid var(--accent);
+    border-radius: var(--radius-sm); padding: var(--s-3);
+    transition: filter var(--t);
   }
-  button:disabled { opacity: .6; cursor: default; }
-  .err {
-    margin-top: 14px; color: var(--bad); font-size: 14px; min-height: 18px;
-  }
+  button:hover { filter: brightness(1.08); }
+  button:disabled { opacity: .6; cursor: default; filter: none; }
+  .err { margin-top: var(--s-4); color: var(--danger); font-size: 13px; min-height: 18px; }
 </style>
 </head>
 <body>
 <form class="card" id="loginForm">
-  <h1>phone-agent <span class="dim">sign in</span></h1>
-  <p class="sub">Enter your dashboard credentials.</p>
-  <label for="username">Username</label>
-  <input type="text" id="username" name="username" autocomplete="username" autofocus required />
-  <label for="password">Password</label>
-  <input type="password" id="password" name="password" autocomplete="current-password" required />
+  <div class="brand"><span class="logo-dot"></span> phone-agent</div>
+  <h1>Sign in</h1>
+  <p class="sub">Enter your workspace credentials.</p>
+  <div class="field">
+    <label for="username">Username</label>
+    <input type="text" id="username" name="username" autocomplete="username" autofocus required />
+  </div>
+  <div class="field">
+    <label for="password">Password</label>
+    <input type="password" id="password" name="password" autocomplete="current-password" required />
+  </div>
   <button type="submit" id="submitBtn">Sign in</button>
   <div class="err" id="err"></div>
 </form>

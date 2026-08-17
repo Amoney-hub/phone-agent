@@ -4,113 +4,199 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Results</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet" />
 <style>
   :root {
-    --bg: #0e1116; --panel: #171b22; --panel-2: #1e232c; --border: #2a313c;
-    --text: #e6e9ef; --muted: #98a2b3; --accent: #6ea8fe; --accent-2: #3b82f6;
-    --good: #34d399; --bad: #f87171; --warn: #fbbf24;
+    --surface-page: #0A0B0D;
+    --surface-card: #121417;
+    --surface-input: #1A1D21;
+    --accent: #3B82F6;
+    --accent-muted: #1E3A5F;
+    --accent-ring: rgba(59, 130, 246, 0.35);
+    --on-accent: #FFFFFF;
+    --text-primary: #F5F6F7;
+    --text-secondary: #9BA1A8;
+    --text-muted: #6B7280;
+    --border: rgba(255, 255, 255, 0.08);
+    --border-strong: rgba(255, 255, 255, 0.14);
+    --booked: #34D399;
+    --callback: #FBBF24;
+    --not-interested: #F87171;
+    --voicemail: #9BA1A8;
+    --booked-tint: rgba(52, 211, 153, 0.12);
+    --callback-tint: rgba(251, 191, 36, 0.12);
+    --not-interested-tint: rgba(248, 113, 113, 0.12);
+    --voicemail-tint: rgba(155, 161, 168, 0.12);
+    --shimmer: rgba(255, 255, 255, 0.05);
+    --radius: 12px;
+    --radius-sm: 8px;
+    --radius-pill: 999px;
+    --s-1: 4px; --s-2: 8px; --s-3: 12px; --s-4: 16px; --s-5: 20px; --s-6: 24px; --s-8: 32px;
+    --t: 150ms ease;
+    --font-ui: "Geist", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --font-mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    --sidebar-w: 240px;
   }
   * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--text);
-    font: 15px/1.5 -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; }
-  header { padding: 20px 24px; border-bottom: 1px solid var(--border);
-    display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
-  header h1 { font-size: 20px; margin: 0; letter-spacing: .3px; }
-  header h1 .dim { color: var(--muted); font-weight: 400; }
-  .spacer { margin-left: auto; }
-  main { max-width: 980px; margin: 0 auto; padding: 24px; }
-  section { margin-bottom: 34px; }
-  section h2 { font-size: 16px; margin: 0 0 14px; color: var(--text); }
-  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
-  button { cursor: pointer; border: 1px solid var(--border); background: var(--panel-2);
-    border-radius: 8px; padding: 8px 12px; color: var(--text); font: inherit; }
-  button:hover { border-color: var(--accent-2); }
-  /* Results header cards */
-  .cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
-  @media (max-width: 680px) { .cards { grid-template-columns: 1fr; } }
-  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 18px 20px; }
-  .card .label { color: var(--muted); font-size: 13px; text-transform: uppercase; letter-spacing: .5px; }
-  .card .value { font-size: 34px; font-weight: 700; margin-top: 6px; letter-spacing: .5px; }
-  .card.value-card .value { color: var(--good); }
-  .card.jobs-card .value { color: var(--accent); }
-  /* Outcome breakdown */
-  table { width: 100%; border-collapse: collapse; }
-  th, td { text-align: left; padding: 11px 16px; border-bottom: 1px solid var(--border); }
-  th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .5px; }
-  tr:last-child td { border-bottom: none; }
-  td.num { text-align: right; font-variant-numeric: tabular-nums; }
-  .bar { height: 8px; border-radius: 999px; background: var(--panel-2); overflow: hidden; }
-  .bar > span { display: block; height: 100%; background: var(--accent-2); }
-  .badge { display: inline-block; padding: 3px 9px; border-radius: 6px; font-size: 12px; font-weight: 600;
-    background: var(--panel-2); border: 1px solid var(--border); color: var(--muted); }
-  .badge.o-booked, .badge.o-interested { color: var(--good); border-color: rgba(52,211,153,.4); }
-  .badge.o-not_interested { color: var(--bad); border-color: rgba(248,113,113,.4); }
-  .badge.o-voicemail, .badge.o-callback_requested { color: var(--warn); border-color: rgba(251,191,36,.4); }
-  .badge.o-reached { color: var(--accent); border-color: rgba(110,168,254,.4); }
-  /* Call log */
-  .call { padding: 14px 16px; border-bottom: 1px solid var(--border); }
+  html, body { height: 100%; }
+  body {
+    margin: 0; background: var(--surface-page); color: var(--text-primary);
+    font-family: var(--font-ui); font-size: 14px; line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+  .mono { font-family: var(--font-mono); font-feature-settings: "tnum" 1; }
+  .text-secondary { color: var(--text-secondary); }
+  .text-muted { color: var(--text-muted); }
+
+  .app { display: flex; min-height: 100vh; }
+  .sidebar {
+    position: fixed; inset: 0 auto 0 0; width: var(--sidebar-w);
+    background: var(--surface-card); border-right: 1px solid var(--border);
+    display: flex; flex-direction: column; padding: var(--s-6) var(--s-4);
+  }
+  .brand { display: flex; align-items: center; gap: var(--s-2); font-weight: 600; font-size: 15px; padding: 0 var(--s-3) var(--s-6); }
+  .brand .logo-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted); }
+  .nav { display: flex; flex-direction: column; gap: var(--s-1); }
+  .nav-item {
+    display: flex; align-items: center; gap: var(--s-3); padding: var(--s-2) var(--s-3);
+    border-radius: var(--radius-sm); color: var(--text-secondary);
+    text-decoration: none; cursor: pointer; font-weight: 500; user-select: none;
+    transition: background var(--t), color var(--t);
+  }
+  .nav-item:hover { background: var(--surface-input); color: var(--text-primary); }
+  .nav-item.active { background: var(--accent-muted); color: var(--text-primary); }
+  .nav-ico { width: 16px; height: 16px; flex: 0 0 16px; }
+  .sidebar-foot { margin-top: auto; padding-top: var(--s-4); border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: var(--s-3); }
+  .whoami { font-size: 12px; color: var(--text-muted); padding: 0 var(--s-3); }
+
+  .content { margin-left: var(--sidebar-w); flex: 1; min-width: 0; padding: var(--s-8); }
+  .container { max-width: 1040px; }
+  .topbar { display: flex; align-items: center; gap: var(--s-4); margin-bottom: var(--s-8); }
+  .topbar h1 { font-size: 22px; font-weight: 600; margin: 0; letter-spacing: -.01em; }
+  .topbar .spacer { margin-left: auto; }
+  .chip { font-size: 13px; color: var(--text-secondary); border: 1px solid var(--border); border-radius: var(--radius-pill); padding: var(--s-1) var(--s-3); }
+
+  .view { display: none; }
+  .view.active { display: block; }
+  .stack > * + * { margin-top: var(--s-6); }
+
+  .card { background: var(--surface-card); border: 1px solid var(--border); border-radius: var(--radius); padding: var(--s-6); }
+  .card.pad-0 { padding: 0; }
+  .section-title { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--text-muted); font-weight: 600; margin: 0 0 var(--s-4); }
+  .label { font-size: 11px; text-transform: uppercase; letter-spacing: .07em; color: var(--text-muted); font-weight: 600; }
+
+  .hero { padding: var(--s-8); }
+  .hero-value { font-family: var(--font-mono); font-weight: 600; font-size: 60px; line-height: 1; letter-spacing: -.03em; }
+  .hero-label { margin-top: var(--s-3); color: var(--text-secondary); font-size: 14px; }
+  .stats { display: grid; grid-template-columns: repeat(2, 1fr); gap: var(--s-4); }
+  @media (max-width: 720px) { .stats { grid-template-columns: 1fr; } }
+  .stat .label { display: block; }
+  .stat-value { font-family: var(--font-mono); font-size: 28px; font-weight: 600; margin-top: var(--s-2); letter-spacing: -.02em; }
+
+  .bd-row { display: grid; grid-template-columns: 150px 1fr 48px 84px; align-items: center; gap: var(--s-3); padding: var(--s-2) 0; }
+  .bd-row + .bd-row { border-top: 1px solid var(--border); }
+  .bar { height: 6px; border-radius: var(--radius-pill); background: var(--surface-input); overflow: hidden; }
+  .bar-fill { display: block; height: 100%; border-radius: var(--radius-pill); background: var(--text-muted); transition: width var(--t); }
+  .bar-fill[data-o="booked"] { background: var(--booked); }
+  .bar-fill[data-o="callback_requested"] { background: var(--callback); }
+  .bar-fill[data-o="not_interested"] { background: var(--not-interested); }
+  .bar-fill[data-o="voicemail"] { background: var(--voicemail); }
+  .bd-count { text-align: right; color: var(--text-primary); }
+  .bd-val { text-align: right; color: var(--text-secondary); }
+
+  .badge { display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px; border-radius: 6px; font-size: 12px; font-weight: 500; color: var(--text-secondary); border: 1px solid var(--border); background: transparent; }
+  .badge-outcome[data-o="booked"] { color: var(--booked); background: var(--booked-tint); border-color: var(--booked-tint); }
+  .badge-outcome[data-o="callback_requested"] { color: var(--callback); background: var(--callback-tint); border-color: var(--callback-tint); }
+  .badge-outcome[data-o="not_interested"] { color: var(--not-interested); background: var(--not-interested-tint); border-color: var(--not-interested-tint); }
+  .badge-outcome[data-o="voicemail"] { color: var(--voicemail); background: var(--voicemail-tint); border-color: var(--voicemail-tint); }
+
+  .btn { font: inherit; font-weight: 500; cursor: pointer; border: 1px solid transparent; border-radius: var(--radius-sm); padding: var(--s-2) var(--s-4); transition: background var(--t), border-color var(--t), color var(--t); }
+  .btn-secondary { background: transparent; color: var(--text-primary); border-color: var(--border); }
+  .btn-secondary:hover { border-color: var(--border-strong); background: var(--surface-input); }
+
+  .call { padding: var(--s-4) var(--s-5); border-bottom: 1px solid var(--border); }
   .call:last-child { border-bottom: none; }
-  .call-head { display: flex; align-items: center; gap: 12px; cursor: pointer; }
-  .call-head .who { font-weight: 600; }
-  .call-head .meta { color: var(--muted); font-size: 13px; margin-left: auto; display: flex; gap: 14px; }
-  .call-summary { margin: 8px 0 0; color: var(--muted); }
-  .call-details { display: none; margin-top: 12px; }
-  .call.open .call-details { display: block; }
+  .call-head { display: flex; align-items: center; gap: var(--s-3); cursor: pointer; }
+  .call-head .who { font-weight: 500; }
+  .call-head .meta { color: var(--text-muted); font-size: 13px; margin-left: auto; display: flex; gap: var(--s-4); }
+  .caret { color: var(--text-muted); transition: transform var(--t); display: inline-block; width: 10px; }
   .call.open .caret { transform: rotate(90deg); }
-  .caret { transition: transform .15s; color: var(--muted); }
-  pre.transcript { white-space: pre-wrap; word-break: break-word; background: var(--panel-2);
-    border: 1px solid var(--border); border-radius: 8px; padding: 12px; margin: 0 0 10px; max-height: 340px;
-    overflow: auto; font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
-  audio { width: 100%; margin-top: 4px; }
-  .muted { color: var(--muted); }
-  .empty { padding: 20px 16px; color: var(--muted); }
+  .call-summary { margin: var(--s-2) 0 0; color: var(--text-secondary); }
+  .call-details { display: none; margin-top: var(--s-3); }
+  .call.open .call-details { display: block; }
+  .call-meta { margin: var(--s-1) 0; font-size: 13px; color: var(--text-secondary); }
+  .call-meta strong { color: var(--text-primary); font-weight: 500; }
+  pre.transcript { white-space: pre-wrap; word-break: break-word; background: var(--surface-input); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: var(--s-3); margin: 0 0 var(--s-3); max-height: 340px; overflow: auto; font: 13px/1.6 var(--font-mono); color: var(--text-secondary); }
+  audio { width: 100%; margin-top: var(--s-1); }
+  .empty { padding: var(--s-5); color: var(--text-muted); }
+
+  .skeleton { position: relative; overflow: hidden; background: var(--surface-input); border-radius: var(--radius-sm); display: inline-block; }
+  .skeleton::after { content: ""; position: absolute; inset: 0; transform: translateX(-100%); background: linear-gradient(90deg, transparent, var(--shimmer), transparent); animation: shimmer 1.2s infinite; }
+  @keyframes shimmer { 100% { transform: translateX(100%); } }
+  .sk-line { height: 12px; border-radius: 6px; }
+  .sk-hero { height: 56px; width: 240px; }
 </style>
 </head>
 <body>
-<header>
-  <h1 id="title">Results</h1>
-  <div class="spacer"></div>
-  <button id="logoutBtn">Log out</button>
-</header>
-<main>
-  <section id="resultsSection">
-    <div class="cards">
-      <div class="card jobs-card">
-        <div class="label">Jobs booked / shifts filled</div>
-        <div class="value" id="jobsBooked">—</div>
-      </div>
-      <div class="card value-card">
-        <div class="label">Estimated value</div>
-        <div class="value" id="estValue">—</div>
-      </div>
-      <div class="card">
-        <div class="label">Calls made</div>
-        <div class="value" id="totalCalls">—</div>
-      </div>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand"><span class="logo-dot"></span> phone-agent</div>
+    <nav class="nav">
+      <a class="nav-item" data-view="overview">
+        <svg class="nav-ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2.5" y="2.5" width="4.5" height="4.5" rx="1"/><rect x="9" y="2.5" width="4.5" height="4.5" rx="1"/><rect x="2.5" y="9" width="4.5" height="4.5" rx="1"/><rect x="9" y="9" width="4.5" height="4.5" rx="1"/></svg>
+        <span>Overview</span>
+      </a>
+      <a class="nav-item" data-view="calls">
+        <svg class="nav-ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 3.2 6 3l1 2.5-1.4 1a7 7 0 0 0 3.9 3.9l1-1.4 2.5 1 -.2 2.5c-5 .6-9.6-4-9-9z"/></svg>
+        <span>Calls</span>
+      </a>
+    </nav>
+    <div class="sidebar-foot">
+      <div class="whoami" id="whoami"></div>
+      <button class="btn btn-secondary" id="logoutBtn">Log out</button>
     </div>
-  </section>
+  </aside>
 
-  <section>
-    <h2>Outcome breakdown</h2>
-    <div class="panel">
-      <table>
-        <thead><tr><th>Outcome</th><th>Calls</th><th style="width:40%"></th><th class="num">Value</th></tr></thead>
-        <tbody id="breakdownBody"></tbody>
-      </table>
-    </div>
-  </section>
+  <main class="content">
+    <div class="container">
+      <div class="topbar">
+        <h1 id="viewTitle">Overview</h1>
+        <div class="spacer"></div>
+        <span class="chip" id="workspaceName"></span>
+      </div>
 
-  <section>
-    <h2>Call log</h2>
-    <div class="panel">
-      <div id="callsList"></div>
-      <div class="empty" id="callsEmpty" hidden>No calls yet.</div>
+      <section class="view" data-view="overview">
+        <div class="stack">
+          <div class="card hero">
+            <div class="hero-value mono" id="estValue"><span class="skeleton sk-hero"></span></div>
+            <div class="hero-label">Estimated value</div>
+          </div>
+          <div class="stats">
+            <div class="card stat"><span class="label">Jobs booked / shifts filled</span><div class="stat-value mono" id="jobsBooked"><span class="skeleton sk-line" style="width:56px"></span></div></div>
+            <div class="card stat"><span class="label">Calls made</span><div class="stat-value mono" id="totalCalls"><span class="skeleton sk-line" style="width:56px"></span></div></div>
+          </div>
+          <div class="card">
+            <div class="section-title">Outcome breakdown</div>
+            <div id="breakdownBody"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="view" data-view="calls">
+        <div class="card pad-0">
+          <div id="callsList"></div>
+          <div class="empty" id="callsEmpty" hidden>No calls yet.</div>
+        </div>
+      </section>
     </div>
-  </section>
-</main>
+  </main>
+</div>
 
 <script>
 const $ = (s) => document.querySelector(s);
+const $$ = (s) => document.querySelectorAll(s);
 function esc(s) { return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c])); }
 
 async function api(url) {
@@ -124,6 +210,26 @@ function fmtDuration(sec) { if (sec == null) return "—"; const m = Math.floor(
 let CURRENCY = "USD";
 function money(n) { try { return new Intl.NumberFormat(undefined, { style: "currency", currency: CURRENCY, maximumFractionDigits: 0 }).format(n || 0); } catch { return "$" + (n||0); } }
 
+// --- View router ----------------------------------------------------------
+const VIEW_TITLES = { overview: "Overview", calls: "Calls" };
+function showView(name) {
+  if (!VIEW_TITLES[name]) name = "overview";
+  $$(".view").forEach((v) => v.classList.toggle("active", v.dataset.view === name));
+  $$(".nav-item").forEach((a) => a.classList.toggle("active", a.dataset.view === name));
+  $("#viewTitle").textContent = VIEW_TITLES[name];
+  if (location.hash.slice(1) !== name) history.replaceState(null, "", "#" + name);
+}
+$$(".nav-item").forEach((a) => a.addEventListener("click", (e) => { e.preventDefault(); showView(a.dataset.view); }));
+
+function sk(w) { return '<span class="skeleton sk-line" style="width:' + w + '"></span>'; }
+function showSkeletons() {
+  $("#breakdownBody").innerHTML = Array.from({ length: 4 }, () =>
+    '<div class="bd-row">' + sk("120px") + '<div class="bar"></div>' + sk("30px") + sk("60px") + '</div>').join("");
+  $("#callsList").innerHTML = Array.from({ length: 4 }, () =>
+    '<div class="call"><div class="call-head"><span class="caret"></span>' + sk("120px") +
+    '<span class="meta">' + sk("80px") + '</span></div></div>').join("");
+}
+
 $("#logoutBtn").addEventListener("click", async () => {
   try { await fetch("/logout", { method: "POST" }); } catch (e) {}
   window.location = "/login";
@@ -131,33 +237,33 @@ $("#logoutBtn").addEventListener("click", async () => {
 
 function outcomeBadge(o) {
   if (!o) return '<span class="badge">unknown</span>';
-  const cls = "o-" + String(o).toLowerCase().replace(/[^a-z_]/g, "");
-  return '<span class="badge ' + esc(cls) + '">' + esc(o) + '</span>';
+  return '<span class="badge badge-outcome" data-o="' + esc(o) + '">' + esc(String(o).replace(/_/g, " ")) + '</span>';
 }
 
 async function loadMe() {
   const me = await api("/api/me");
-  if (me.client && me.client.name) $("#title").innerHTML = esc(me.client.name) + ' <span class="dim">results</span>';
+  const name = me.client && me.client.name ? me.client.name : "";
+  $("#workspaceName").textContent = name;
+  $("#whoami").textContent = name ? name + " workspace" : "";
 }
 
 async function loadResults() {
   const r = await api("/api/results");
   CURRENCY = r.currency || "USD";
-  $("#jobsBooked").textContent = r.jobs_booked;
   $("#estValue").textContent = money(r.estimated_value);
+  $("#jobsBooked").textContent = r.jobs_booked;
   $("#totalCalls").textContent = r.total_calls;
-  const max = Math.max(1, ...r.breakdown.map((b) => b.count));
-  const body = $("#breakdownBody");
-  body.innerHTML = "";
-  for (const b of r.breakdown) {
-    const tr = document.createElement("tr");
-    tr.innerHTML =
-      '<td>' + outcomeBadge(b.outcome) + '</td>' +
-      '<td class="num">' + b.count + '</td>' +
-      '<td><div class="bar"><span style="width:' + Math.round((b.count / max) * 100) + '%"></span></div></td>' +
-      '<td class="num">' + (b.value ? money(b.value) : "—") + '</td>';
-    body.appendChild(tr);
-  }
+  const rows = r.breakdown || [];
+  const max = Math.max(1, ...rows.map((b) => b.count));
+  $("#breakdownBody").innerHTML = rows.map((b) => {
+    const pct = Math.round((b.count / max) * 100);
+    return '<div class="bd-row">' +
+      outcomeBadge(b.outcome) +
+      '<div class="bar"><span class="bar-fill" data-o="' + esc(b.outcome) + '" style="width:' + pct + '%"></span></div>' +
+      '<span class="mono bd-count">' + b.count + '</span>' +
+      '<span class="mono bd-val">' + (b.value ? money(b.value) : "—") + '</span>' +
+    '</div>';
+  }).join("");
 }
 
 async function loadCalls() {
@@ -172,33 +278,35 @@ function callRow(call) {
   const div = document.createElement("div");
   div.className = "call";
   const who = call.contact_name || call.phone || "Unknown";
-  const hasDetails = call.transcript || call.recording_url;
-  let head =
+  const hasDetails = call.transcript || call.recording_url || call.callback_time || call.notes;
+  const head =
     '<div class="call-head">' +
       '<span class="caret">' + (hasDetails ? "▶" : "") + '</span>' +
       '<span class="who">' + esc(who) + '</span>' +
       outcomeBadge(call.outcome) +
       '<span class="meta">' +
-        '<span>⏱ ' + fmtDuration(call.duration_seconds) + '</span>' +
-        '<span>' + esc((call.updated_at || "").replace("T", " ")) + '</span>' +
+        '<span class="mono">' + fmtDuration(call.duration_seconds) + '</span>' +
+        '<span class="mono">' + esc((call.updated_at || "").replace("T", " ")) + '</span>' +
       '</span>' +
     '</div>';
-  let summary = call.summary
+  const summary = call.summary
     ? '<p class="call-summary">' + esc(call.summary) + '</p>'
-    : '<p class="call-summary muted">No summary.</p>';
+    : '<p class="call-summary text-muted">No summary.</p>';
   let details = '<div class="call-details">';
-  if (call.callback_time) details += '<p class="muted"><strong>Callback:</strong> ' + esc(call.callback_time) + '</p>';
-  if (call.notes) details += '<p class="muted"><strong>Notes:</strong> ' + esc(call.notes) + '</p>';
+  if (call.callback_time) details += '<p class="call-meta"><strong>Callback:</strong> ' + esc(call.callback_time) + '</p>';
+  if (call.notes) details += '<p class="call-meta"><strong>Notes:</strong> ' + esc(call.notes) + '</p>';
   if (call.transcript) details += '<pre class="transcript">' + esc(call.transcript) + '</pre>';
   if (call.recording_url) details += '<audio controls preload="none" src="' + esc(call.recording_url) + '"></audio>';
-  if (!hasDetails && !call.callback_time && !call.notes) details += '<span class="muted">No transcript or recording.</span>';
+  if (!hasDetails) details += '<span class="text-muted">No transcript or recording.</span>';
   details += '</div>';
   div.innerHTML = head + summary + details;
-  div.querySelector(".call-head").onclick = () => div.classList.toggle("open");
+  div.querySelector(".call-head").onclick = () => { if (hasDetails) div.classList.toggle("open"); };
   return div;
 }
 
 (async function boot() {
+  showView(location.hash.slice(1) || "overview");
+  showSkeletons();
   try {
     await loadMe();
     await Promise.all([loadResults(), loadCalls()]);
