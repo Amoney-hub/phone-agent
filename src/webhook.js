@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import crypto from "node:crypto";
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
@@ -36,6 +37,7 @@ import {
   getDefaultClientId,
   resolveClientId,
   regenerateClientApiKey,
+  DB_PATH,
 } from "./db.js";
 import { renderDashboard, renderLogin, renderClient } from "./dashboard.js";
 import { resolveOutcome } from "./vapi.js";
@@ -211,6 +213,38 @@ app.get("/api/status", requireAdmin, (_req, res) => {
       process.env.TWILIO_NUMBER !== TWILIO_NUMBER_PLACEHOLDER
   );
   res.json({ vapi, twilio });
+});
+
+// Diagnostics: which SQLite file is actually open (admin only). Confirms whether
+// PHONE_AGENT_DB / a mounted volume is being read at runtime, or a default path
+// is being used. Exposes only paths + file metadata, no secrets.
+app.get("/api/diag", requireAdmin, (_req, res) => {
+  let dbFileExists = false;
+  let dbSizeBytes = null;
+  try {
+    const st = fs.statSync(DB_PATH);
+    dbFileExists = true;
+    dbSizeBytes = st.size;
+  } catch {
+    /* file not created yet */
+  }
+  let dbDirWritable = false;
+  try {
+    fs.accessSync(path.dirname(DB_PATH), fs.constants.W_OK);
+    dbDirWritable = true;
+  } catch {
+    /* not writable */
+  }
+  res.json({
+    db_path: DB_PATH,
+    phone_agent_db_env: process.env.PHONE_AGENT_DB ?? null,
+    using_env_var: Boolean(process.env.PHONE_AGENT_DB),
+    db_file_exists: dbFileExists,
+    db_size_bytes: dbSizeBytes,
+    db_dir_writable: dbDirWritable,
+    cwd: process.cwd(),
+    node_version: process.version,
+  });
 });
 
 // --- Client management (admin only) ----------------------------------------

@@ -21,6 +21,10 @@ const dbPath = process.env.PHONE_AGENT_DB
   ? path.resolve(process.env.PHONE_AGENT_DB)
   : path.join(__dirname, "..", "contacts.db");
 
+// The absolute SQLite file actually opened by this process. Exported so a
+// diagnostic route can confirm PHONE_AGENT_DB / a mounted volume is being used.
+export const DB_PATH = dbPath;
+
 const db = new Database(dbPath);
 db.pragma("journal_mode = WAL");
 
