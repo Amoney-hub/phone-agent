@@ -5,6 +5,8 @@
 import crypto from "node:crypto";
 import bcrypt from "bcryptjs";
 
+import { getClientAuthByUsername } from "./db.js";
+
 const COOKIE_NAME = "pa_session";
 // How long a login stays valid.
 const SESSION_TTL_SECONDS = 12 * 60 * 60; // 12 hours
@@ -41,31 +43,51 @@ function safeEqual(a, b) {
 }
 
 /**
- * Verify a submitted username/password against the configured admin
- * credentials. Returns true only on an exact username match and bcrypt hash
- * match. Async because bcrypt.compare is.
+ * Authenticate a username/password. Checks the admin credentials first, then
+ * client login accounts stored in the `clients` table. Returns a principal
+ * `{ role, username, clientId }` on success, or null.
+ *
+ * - admin:  role "admin", clientId null (full access, all tenants)
+ * - client: role "client", clientId <their client id> (own workspace, read-only)
  */
-export async function verifyCredentials(username, password) {
-  if (!isAuthConfigured()) return false;
-  const userOk = safeEqual(String(username ?? ""), process.env.DASHBOARD_USER);
-  // Always run bcrypt.compare (even on username mismatch) to avoid leaking
-  // which field was wrong via timing.
-  let passOk = false;
-  try {
-    passOk = await bcrypt.compare(
-      String(password ?? ""),
-      process.env.DASHBOARD_PASSWORD_HASH
-    );
-  } catch {
-    passOk = false;
+export async function authenticate(username, password) {
+  const uname = String(username ?? "");
+  const pass = String(password ?? "");
+
+  // Admin (from env).
+  if (isAuthConfigured() && safeEqual(uname, process.env.DASHBOARD_USER)) {
+    let ok = false;
+    try {
+      ok = await bcrypt.compare(pass, process.env.DASHBOARD_PASSWORD_HASH);
+    } catch {
+      ok = false;
+    }
+    return ok ? { role: "admin", username: uname, clientId: null } : null;
   }
-  return userOk && passOk;
+
+  // Client login account.
+  const row = getClientAuthByUsername(uname);
+  if (row && row.password_hash) {
+    let ok = false;
+    try {
+      ok = await bcrypt.compare(pass, row.password_hash);
+    } catch {
+      ok = false;
+    }
+    if (ok) return { role: "client", username: row.username, clientId: row.id };
+  }
+  return null;
 }
 
-/** Create a signed session token for the given username. */
-export function createSessionToken(username) {
+/** Create a signed session token for a principal. */
+export function createSessionToken(principal) {
   const payload = b64url(
-    JSON.stringify({ u: username, iat: Math.floor(Date.now() / 1000) })
+    JSON.stringify({
+      sub: principal.username,
+      role: principal.role,
+      cid: principal.clientId ?? null,
+      iat: Math.floor(Date.now() / 1000),
+    })
   );
   return `${payload}.${hmac(payload)}`;
 }
@@ -121,11 +143,11 @@ function isSecureRequest(req) {
   return req.secure || req.headers["x-forwarded-proto"] === "https";
 }
 
-/** Set the session cookie on the response. */
-export function setSessionCookie(req, res, username) {
+/** Set the session cookie on the response for an authenticated principal. */
+export function setSessionCookie(req, res, principal) {
   res.setHeader(
     "Set-Cookie",
-    serializeCookie(createSessionToken(username), {
+    serializeCookie(createSessionToken(principal), {
       maxAge: SESSION_TTL_SECONDS,
       secure: isSecureRequest(req),
     })
@@ -194,4 +216,49 @@ export function hasValidBearer(req) {
 export function requireApiAuth(req, res, next) {
   if (hasValidBearer(req)) return next();
   return requireAuthApi(req, res, next);
+}
+
+/**
+ * Resolve the caller's principal: `{ role, clientId, username, via }` or null.
+ * A valid bearer token is treated as an admin (the MCP server). A session
+ * carries its role/clientId. Legacy tokens (no role) are treated as admin.
+ */
+export function getPrincipal(req) {
+  if (hasValidBearer(req)) {
+    return { role: "admin", clientId: null, username: "api", via: "bearer" };
+  }
+  const s = getSession(req);
+  if (!s) return null;
+  return {
+    role: s.role || "admin",
+    clientId: s.cid ?? null,
+    username: s.sub || s.u || "admin",
+    via: "session",
+  };
+}
+
+/** Middleware: require an admin principal (403 for clients). */
+export function requireAdmin(req, res, next) {
+  const p = getPrincipal(req);
+  if (!p) return res.status(401).json({ error: "unauthorized" });
+  if (p.role !== "admin") return res.status(403).json({ error: "forbidden" });
+  req.principal = p;
+  return next();
+}
+
+/**
+ * Resolve the tenant scope for a request: `{ principal, clientId }`.
+ * - client role: forced to their own clientId (they cannot widen it).
+ * - admin role: honors an optional `?client_id=` filter (a number), else null
+ *   meaning "all clients".
+ */
+export function resolveScope(req) {
+  const principal = getPrincipal(req);
+  if (!principal) return { principal: null, clientId: null };
+  if (principal.role === "client") {
+    return { principal, clientId: principal.clientId };
+  }
+  const q = req.query?.client_id;
+  const n = q != null && q !== "" && q !== "all" ? Number(q) : NaN;
+  return { principal, clientId: Number.isInteger(n) ? n : null };
 }

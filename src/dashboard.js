@@ -9,6 +9,7 @@ const __dirname =
 
 const htmlPath = path.join(__dirname, "dashboard.html");
 const loginPath = path.join(__dirname, "login.html");
+const clientPath = path.join(__dirname, "client.html");
 
 /**
  * Return the self-contained dashboard HTML. Read from disk each call so edits
@@ -21,4 +22,9 @@ export function renderDashboard() {
 /** Return the self-contained login page HTML. */
 export function renderLogin() {
   return fs.readFileSync(loginPath, "utf8");
+}
+
+/** Return the self-contained client (read-only) results page HTML. */
+export function renderClient() {
+  return fs.readFileSync(clientPath, "utf8");
 }

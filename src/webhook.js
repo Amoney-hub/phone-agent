@@ -27,16 +27,25 @@ import {
   updateContact,
   deleteContact,
   listCalls,
+  countQueuedCalls,
+  listClients,
+  createClient,
+  getClientById,
+  setClientOutcomeValues,
+  setClientLogin,
+  getDefaultClientId,
 } from "./db.js";
-import { renderDashboard, renderLogin } from "./dashboard.js";
+import { renderDashboard, renderLogin, renderClient } from "./dashboard.js";
 import { resolveOutcome } from "./vapi.js";
 import {
   isAuthConfigured,
-  verifyCredentials,
+  authenticate,
   setSessionCookie,
   clearSessionCookie,
   requireApiAuth,
-  requireAuthPage,
+  requireAdmin,
+  getPrincipal,
+  resolveScope,
 } from "./auth.js";
 import {
   placeCall,
@@ -50,7 +59,8 @@ import {
   processQueuedCalls,
 } from "./trigger.js";
 import { evaluateCallHours } from "./callhours.js";
-import { countQueuedCalls } from "./db.js";
+import { computeResults } from "./metrics.js";
+import bcrypt from "bcryptjs";
 
 // Hosted platforms (Railway, Render, Heroku, …) assign the port via PORT and
 // route external traffic to it, so it must take precedence.
@@ -78,12 +88,12 @@ app.post("/login", async (req, res) => {
         "Dashboard auth is not configured. Set DASHBOARD_USER and DASHBOARD_PASSWORD_HASH (see scripts/hash-password.js).",
     });
   }
-  const ok = await verifyCredentials(username, password);
-  if (!ok) {
+  const principal = await authenticate(username, password);
+  if (!principal) {
     return res.status(401).json({ error: "Invalid username or password." });
   }
-  setSessionCookie(req, res, String(username));
-  res.json({ ok: true });
+  setSessionCookie(req, res, principal);
+  res.json({ ok: true, role: principal.role });
 });
 
 // Log out: clear the cookie. Accept GET (link) and POST (button/fetch).
@@ -107,15 +117,75 @@ app.post("/api/trigger/call", requireTriggerAuth, handleTriggerCall);
 // token (the latter is how the MCP server talks to this API in remote mode).
 app.use("/api", requireApiAuth);
 
-// Single self-contained dashboard page (session-protected).
-app.get("/", requireAuthPage, (_req, res) => {
-  res.type("html").send(renderDashboard());
+// The dashboard page. Admins get the full admin UI; clients get their
+// read-only results view. Both are session-protected.
+app.get("/", (req, res) => {
+  const p = getPrincipal(req);
+  if (!p) return res.redirect("/login");
+  res.type("html").send(p.role === "client" ? renderClient() : renderDashboard());
 });
 
 const TWILIO_NUMBER_PLACEHOLDER = "+15551234567";
 
-// Report whether the external integrations are configured.
-app.get("/api/status", (_req, res) => {
+// Optional per-minute cost estimate — admin-only; NEVER exposed to clients.
+const COST_PER_MINUTE = Number(process.env.COST_PER_MINUTE || 0);
+
+/**
+ * Serialize a call row for a response. Clients get a trimmed, safe view: no
+ * source tag, batch id, tenant id, objective, or cost. Admins get the full row
+ * plus an estimated per-call cost.
+ */
+function serializeCall(row, role) {
+  const base = {
+    call_id: row.call_id,
+    contact_name: row.contact_name || null,
+    phone: row.customer_number || null,
+    status: row.status,
+    ended_reason: row.ended_reason,
+    outcome: row.outcome,
+    callback_time: row.callback_time,
+    notes: row.notes,
+    summary: row.summary,
+    transcript: row.transcript,
+    recording_url: row.recording_url,
+    duration_seconds: row.duration_seconds,
+    updated_at: row.updated_at,
+  };
+  if (role === "admin") {
+    base.batch_id = row.batch_id;
+    base.source_tag = row.source_tag;
+    base.client_id = row.client_id;
+    base.cost =
+      COST_PER_MINUTE && row.duration_seconds
+        ? Math.round((row.duration_seconds / 60) * COST_PER_MINUTE * 100) / 100
+        : null;
+  }
+  return base;
+}
+
+// Who am I — drives the UI (role, client, and the admin client switcher list).
+app.get("/api/me", (req, res) => {
+  const p = getPrincipal(req);
+  if (!p) return res.status(401).json({ error: "unauthorized" });
+  if (p.role === "client") {
+    const client = getClientById(p.clientId);
+    // Never expose other tenants or config to a client.
+    return res.json({
+      role: "client",
+      username: p.username,
+      client: client ? { id: client.id, name: client.name } : null,
+    });
+  }
+  res.json({
+    role: "admin",
+    username: p.username,
+    clients: listClients(),
+    default_client_id: getDefaultClientId(),
+  });
+});
+
+// Report whether the external integrations are configured (admin only).
+app.get("/api/status", requireAdmin, (_req, res) => {
   const vapi = Boolean(process.env.VAPI_TOKEN && process.env.VAPI_PHONE_ID);
   const twilio = Boolean(
     process.env.TWILIO_SID &&
@@ -126,24 +196,86 @@ app.get("/api/status", (_req, res) => {
   res.json({ vapi, twilio });
 });
 
-// Contacts CRUD.
-app.get("/api/contacts", (_req, res) => {
-  res.json(listContacts());
-});
+// --- Client management (admin only) ----------------------------------------
 
-app.post("/api/contacts", (req, res) => {
-  const { name, phone } = req.body ?? {};
-  if (!name || !phone) {
-    return res.status(400).json({ error: "name and phone are required." });
+app.get("/api/clients", requireAdmin, (_req, res) => res.json(listClients()));
+
+app.post("/api/clients", requireAdmin, (req, res) => {
+  const { name, outcome_values } = req.body ?? {};
+  if (!name || !String(name).trim()) {
+    return res.status(400).json({ error: "name is required." });
   }
   try {
-    res.status(201).json(addContact(String(name).trim(), String(phone).trim()));
+    res
+      .status(201)
+      .json(createClient({ name: String(name).trim(), outcomeValues: outcome_values || {} }));
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
 });
 
-app.put("/api/contacts/:id", (req, res) => {
+// Set the per-outcome dollar values used for a client's results header.
+app.put("/api/clients/:id/values", requireAdmin, (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || !getClientById(id)) {
+    return res.status(404).json({ error: "client not found." });
+  }
+  const values = req.body?.outcome_values ?? req.body ?? {};
+  const clean = {};
+  for (const [k, v] of Object.entries(values)) {
+    const n = Number(v);
+    if (Number.isFinite(n)) clean[k] = n;
+  }
+  res.json(setClientOutcomeValues(id, clean));
+});
+
+// Create/update a client's login (username + password).
+app.put("/api/clients/:id/login", requireAdmin, async (req, res) => {
+  const id = Number(req.params.id);
+  const { username, password } = req.body ?? {};
+  if (!Number.isInteger(id) || !getClientById(id)) {
+    return res.status(404).json({ error: "client not found." });
+  }
+  if (!username || !password) {
+    return res.status(400).json({ error: "username and password are required." });
+  }
+  try {
+    const hash = await bcrypt.hash(String(password), 12);
+    res.json(setClientLogin(id, String(username).trim(), hash));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// --- Results (admin and clients; always tenant-scoped) ---------------------
+
+app.get("/api/results", (req, res) => {
+  const { clientId } = resolveScope(req);
+  res.json(computeResults(clientId));
+});
+
+// Contacts CRUD — admin only, scoped to the selected client.
+app.get("/api/contacts", requireAdmin, (req, res) => {
+  const { clientId } = resolveScope(req);
+  res.json(listContacts(clientId));
+});
+
+app.post("/api/contacts", requireAdmin, (req, res) => {
+  const { name, phone } = req.body ?? {};
+  if (!name || !phone) {
+    return res.status(400).json({ error: "name and phone are required." });
+  }
+  const { clientId } = resolveScope(req);
+  try {
+    res
+      .status(201)
+      .json(addContact(String(name).trim(), String(phone).trim(), clientId ?? getDefaultClientId()));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.put("/api/contacts/:id", requireAdmin, (req, res) => {
   const id = Number(req.params.id);
   const { name, phone } = req.body ?? {};
   if (!Number.isInteger(id)) {
@@ -163,32 +295,35 @@ app.put("/api/contacts/:id", (req, res) => {
   }
 });
 
-app.delete("/api/contacts/:id", (req, res) => {
+app.delete("/api/contacts/:id", requireAdmin, (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) {
     return res.status(400).json({ error: "invalid id." });
   }
-  const removed = deleteContact(id);
-  if (!removed) return res.status(404).json({ error: "contact not found." });
+  if (!deleteContact(id)) return res.status(404).json({ error: "contact not found." });
   res.json({ deleted: true });
 });
 
-// Call history, newest first, with resolved contact name.
-app.get("/api/calls", (_req, res) => {
-  res.json(listCalls());
+// Call history, newest first, with resolved contact name. Tenant-scoped and
+// serialized per role (admin vs client).
+app.get("/api/calls", (req, res) => {
+  const { principal, clientId } = resolveScope(req);
+  res.json(listCalls(clientId).map((r) => serializeCall(r, principal.role)));
 });
 
-// Place a single call to a saved contact.
-app.post("/api/calls", async (req, res) => {
+// Place a single call to a saved contact (admin only), under the selected client.
+app.post("/api/calls", requireAdmin, async (req, res) => {
   const { name, objective, voicemail_message } = req.body ?? {};
   if (!name || !objective) {
     return res.status(400).json({ error: "name and objective are required." });
   }
+  const { clientId } = resolveScope(req);
   try {
     const result = await placeCall({
       name: String(name),
       objective: String(objective),
       voicemailMessage: voicemail_message,
+      clientId: clientId ?? getDefaultClientId(),
     });
     res.status(201).json(result);
   } catch (err) {
@@ -198,17 +333,19 @@ app.post("/api/calls", async (req, res) => {
   }
 });
 
-// Place a batch of calls to several saved contacts, staggered.
-app.post("/api/calls/batch", async (req, res) => {
+// Place a batch of calls (admin only), under the selected client.
+app.post("/api/calls/batch", requireAdmin, async (req, res) => {
   const { names, objective, voicemail_message } = req.body ?? {};
   if (!Array.isArray(names) || names.length === 0 || !objective) {
     return res.status(400).json({ error: "names[] and objective are required." });
   }
+  const { clientId } = resolveScope(req);
   try {
     const result = await placeBatch({
       names: names.map(String),
       objective: String(objective),
       voicemailMessage: voicemail_message,
+      clientId: clientId ?? getDefaultClientId(),
     });
     res.json(result);
   } catch (err) {
@@ -216,19 +353,25 @@ app.post("/api/calls/batch", async (req, res) => {
   }
 });
 
-// Fetch all calls in a batch. Registered before /api/calls/:id so "batch" is
-// not captured as an :id.
+// Fetch all calls in a batch (tenant-scoped). Registered before /api/calls/:id
+// so "batch" is not captured as an :id.
 app.get("/api/calls/batch/:batchId", (req, res) => {
-  res.json({ batch_id: req.params.batchId, calls: getBatchResult(req.params.batchId) });
+  const { principal, clientId } = resolveScope(req);
+  const calls = getBatchResult(req.params.batchId, clientId).map((r) =>
+    serializeCall(r, principal.role)
+  );
+  res.json({ batch_id: req.params.batchId, calls });
 });
 
-// Fetch one call's result (stored webhook report, else the Vapi API).
+// Fetch one call's result (tenant-scoped; stored report, else Vapi for admin).
 app.get("/api/calls/:id", async (req, res) => {
+  const { clientId } = resolveScope(req);
   try {
-    const { source, call } = await getCallResult(req.params.id);
+    const { source, call } = await getCallResult(req.params.id, clientId);
     res.json({ source, call });
   } catch (err) {
-    res.status(502).json({ error: err.message });
+    const notFound = /No call .* found/.test(err.message);
+    res.status(notFound ? 404 : 502).json({ error: err.message });
   }
 });
 

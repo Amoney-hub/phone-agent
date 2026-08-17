@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Results</title>
+<style>
+  :root {
+    --bg: #0e1116; --panel: #171b22; --panel-2: #1e232c; --border: #2a313c;
+    --text: #e6e9ef; --muted: #98a2b3; --accent: #6ea8fe; --accent-2: #3b82f6;
+    --good: #34d399; --bad: #f87171; --warn: #fbbf24;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.5 -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; }
+  header { padding: 20px 24px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+  header h1 { font-size: 20px; margin: 0; letter-spacing: .3px; }
+  header h1 .dim { color: var(--muted); font-weight: 400; }
+  .spacer { margin-left: auto; }
+  main { max-width: 980px; margin: 0 auto; padding: 24px; }
+  section { margin-bottom: 34px; }
+  section h2 { font-size: 16px; margin: 0 0 14px; color: var(--text); }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+  button { cursor: pointer; border: 1px solid var(--border); background: var(--panel-2);
+    border-radius: 8px; padding: 8px 12px; color: var(--text); font: inherit; }
+  button:hover { border-color: var(--accent-2); }
+  /* Results header cards */
+  .cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  @media (max-width: 680px) { .cards { grid-template-columns: 1fr; } }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 18px 20px; }
+  .card .label { color: var(--muted); font-size: 13px; text-transform: uppercase; letter-spacing: .5px; }
+  .card .value { font-size: 34px; font-weight: 700; margin-top: 6px; letter-spacing: .5px; }
+  .card.value-card .value { color: var(--good); }
+  .card.jobs-card .value { color: var(--accent); }
+  /* Outcome breakdown */
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 11px 16px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .5px; }
+  tr:last-child td { border-bottom: none; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .bar { height: 8px; border-radius: 999px; background: var(--panel-2); overflow: hidden; }
+  .bar > span { display: block; height: 100%; background: var(--accent-2); }
+  .badge { display: inline-block; padding: 3px 9px; border-radius: 6px; font-size: 12px; font-weight: 600;
+    background: var(--panel-2); border: 1px solid var(--border); color: var(--muted); }
+  .badge.o-booked, .badge.o-interested { color: var(--good); border-color: rgba(52,211,153,.4); }
+  .badge.o-not_interested { color: var(--bad); border-color: rgba(248,113,113,.4); }
+  .badge.o-voicemail, .badge.o-callback_requested { color: var(--warn); border-color: rgba(251,191,36,.4); }
+  .badge.o-reached { color: var(--accent); border-color: rgba(110,168,254,.4); }
+  /* Call log */
+  .call { padding: 14px 16px; border-bottom: 1px solid var(--border); }
+  .call:last-child { border-bottom: none; }
+  .call-head { display: flex; align-items: center; gap: 12px; cursor: pointer; }
+  .call-head .who { font-weight: 600; }
+  .call-head .meta { color: var(--muted); font-size: 13px; margin-left: auto; display: flex; gap: 14px; }
+  .call-summary { margin: 8px 0 0; color: var(--muted); }
+  .call-details { display: none; margin-top: 12px; }
+  .call.open .call-details { display: block; }
+  .call.open .caret { transform: rotate(90deg); }
+  .caret { transition: transform .15s; color: var(--muted); }
+  pre.transcript { white-space: pre-wrap; word-break: break-word; background: var(--panel-2);
+    border: 1px solid var(--border); border-radius: 8px; padding: 12px; margin: 0 0 10px; max-height: 340px;
+    overflow: auto; font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  audio { width: 100%; margin-top: 4px; }
+  .muted { color: var(--muted); }
+  .empty { padding: 20px 16px; color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="title">Results</h1>
+  <div class="spacer"></div>
+  <button id="logoutBtn">Log out</button>
+</header>
+<main>
+  <section id="resultsSection">
+    <div class="cards">
+      <div class="card jobs-card">
+        <div class="label">Jobs booked / shifts filled</div>
+        <div class="value" id="jobsBooked">—</div>
+      </div>
+      <div class="card value-card">
+        <div class="label">Estimated value</div>
+        <div class="value" id="estValue">—</div>
+      </div>
+      <div class="card">
+        <div class="label">Calls made</div>
+        <div class="value" id="totalCalls">—</div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Outcome breakdown</h2>
+    <div class="panel">
+      <table>
+        <thead><tr><th>Outcome</th><th>Calls</th><th style="width:40%"></th><th class="num">Value</th></tr></thead>
+        <tbody id="breakdownBody"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>Call log</h2>
+    <div class="panel">
+      <div id="callsList"></div>
+      <div class="empty" id="callsEmpty" hidden>No calls yet.</div>
+    </div>
+  </section>
+</main>
+
+<script>
+const $ = (s) => document.querySelector(s);
+function esc(s) { return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c])); }
+
+async function api(url) {
+  const res = await fetch(url);
+  if (res.status === 401) { window.location = "/login"; throw new Error("Not signed in"); }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error((data && data.error) || ("HTTP " + res.status));
+  return data;
+}
+function fmtDuration(sec) { if (sec == null) return "—"; const m = Math.floor(sec/60); return m + ":" + String(sec%60).padStart(2,"0"); }
+let CURRENCY = "USD";
+function money(n) { try { return new Intl.NumberFormat(undefined, { style: "currency", currency: CURRENCY, maximumFractionDigits: 0 }).format(n || 0); } catch { return "$" + (n||0); } }
+
+$("#logoutBtn").addEventListener("click", async () => {
+  try { await fetch("/logout", { method: "POST" }); } catch (e) {}
+  window.location = "/login";
+});
+
+function outcomeBadge(o) {
+  if (!o) return '<span class="badge">unknown</span>';
+  const cls = "o-" + String(o).toLowerCase().replace(/[^a-z_]/g, "");
+  return '<span class="badge ' + esc(cls) + '">' + esc(o) + '</span>';
+}
+
+async function loadMe() {
+  const me = await api("/api/me");
+  if (me.client && me.client.name) $("#title").innerHTML = esc(me.client.name) + ' <span class="dim">results</span>';
+}
+
+async function loadResults() {
+  const r = await api("/api/results");
+  CURRENCY = r.currency || "USD";
+  $("#jobsBooked").textContent = r.jobs_booked;
+  $("#estValue").textContent = money(r.estimated_value);
+  $("#totalCalls").textContent = r.total_calls;
+  const max = Math.max(1, ...r.breakdown.map((b) => b.count));
+  const body = $("#breakdownBody");
+  body.innerHTML = "";
+  for (const b of r.breakdown) {
+    const tr = document.createElement("tr");
+    tr.innerHTML =
+      '<td>' + outcomeBadge(b.outcome) + '</td>' +
+      '<td class="num">' + b.count + '</td>' +
+      '<td><div class="bar"><span style="width:' + Math.round((b.count / max) * 100) + '%"></span></div></td>' +
+      '<td class="num">' + (b.value ? money(b.value) : "—") + '</td>';
+    body.appendChild(tr);
+  }
+}
+
+async function loadCalls() {
+  const calls = await api("/api/calls");
+  const list = $("#callsList");
+  list.innerHTML = "";
+  $("#callsEmpty").hidden = calls.length > 0;
+  for (const call of calls) list.appendChild(callRow(call));
+}
+
+function callRow(call) {
+  const div = document.createElement("div");
+  div.className = "call";
+  const who = call.contact_name || call.phone || "Unknown";
+  const hasDetails = call.transcript || call.recording_url;
+  let head =
+    '<div class="call-head">' +
+      '<span class="caret">' + (hasDetails ? "▶" : "") + '</span>' +
+      '<span class="who">' + esc(who) + '</span>' +
+      outcomeBadge(call.outcome) +
+      '<span class="meta">' +
+        '<span>⏱ ' + fmtDuration(call.duration_seconds) + '</span>' +
+        '<span>' + esc((call.updated_at || "").replace("T", " ")) + '</span>' +
+      '</span>' +
+    '</div>';
+  let summary = call.summary
+    ? '<p class="call-summary">' + esc(call.summary) + '</p>'
+    : '<p class="call-summary muted">No summary.</p>';
+  let details = '<div class="call-details">';
+  if (call.callback_time) details += '<p class="muted"><strong>Callback:</strong> ' + esc(call.callback_time) + '</p>';
+  if (call.notes) details += '<p class="muted"><strong>Notes:</strong> ' + esc(call.notes) + '</p>';
+  if (call.transcript) details += '<pre class="transcript">' + esc(call.transcript) + '</pre>';
+  if (call.recording_url) details += '<audio controls preload="none" src="' + esc(call.recording_url) + '"></audio>';
+  if (!hasDetails && !call.callback_time && !call.notes) details += '<span class="muted">No transcript or recording.</span>';
+  details += '</div>';
+  div.innerHTML = head + summary + details;
+  div.querySelector(".call-head").onclick = () => div.classList.toggle("open");
+  return div;
+}
+
+(async function boot() {
+  try {
+    await loadMe();
+    await Promise.all([loadResults(), loadCalls()]);
+  } catch (e) { /* redirect handled in api() */ }
+  setInterval(() => loadCalls().catch(() => {}), 20000);
+  setInterval(() => loadResults().catch(() => {}), 20000);
+})();
+</script>
+</body>
+</html>

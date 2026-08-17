@@ -24,15 +24,28 @@ const db = new Database(dbPath);
 db.pragma("journal_mode = WAL");
 
 db.exec(`
+  -- Tenants. Each contact/call/appointment/batch belongs to one client.
+  CREATE TABLE IF NOT EXISTS clients (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    name           TEXT NOT NULL,
+    username       TEXT UNIQUE COLLATE NOCASE,
+    password_hash  TEXT,
+    outcome_values TEXT NOT NULL DEFAULT '{}',
+    created_at     TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
   CREATE TABLE IF NOT EXISTS contacts (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    name       TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    client_id  INTEGER,
+    name       TEXT NOT NULL COLLATE NOCASE,
     phone      TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(client_id, name)
   );
 
   CREATE TABLE IF NOT EXISTS calls (
     call_id          TEXT PRIMARY KEY,
+    client_id        INTEGER,
     batch_id         TEXT,
     status           TEXT,
     ended_reason     TEXT,
@@ -48,6 +61,25 @@ db.exec(`
     updated_at       TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
+  -- Batches of calls placed together (call_list / batch trigger).
+  CREATE TABLE IF NOT EXISTS batches (
+    batch_id   TEXT PRIMARY KEY,
+    client_id  INTEGER,
+    objective  TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  -- Booked jobs/shifts, derived from calls whose outcome is "booked".
+  CREATE TABLE IF NOT EXISTS appointments (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    client_id      INTEGER,
+    call_id        TEXT UNIQUE,
+    contact_name   TEXT,
+    phone          TEXT,
+    scheduled_time TEXT,
+    created_at     TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
   -- Calls received via the inbound trigger endpoint while outside business
   -- hours wait here until the call window reopens (see src/callhours.js).
   CREATE TABLE IF NOT EXISTS queued_calls (
@@ -60,124 +92,143 @@ db.exec(`
   );
 `);
 
-// Lightweight migration for databases created before these columns existed.
+// --- Migrations for databases created before multi-tenancy ------------------
+
 const callColumns = new Set(
   db.prepare(`PRAGMA table_info(calls)`).all().map((c) => c.name)
 );
-if (!callColumns.has("customer_number")) {
-  db.exec(`ALTER TABLE calls ADD COLUMN customer_number TEXT;`);
-}
-if (!callColumns.has("duration_seconds")) {
-  db.exec(`ALTER TABLE calls ADD COLUMN duration_seconds INTEGER;`);
-}
-if (!callColumns.has("batch_id")) {
-  db.exec(`ALTER TABLE calls ADD COLUMN batch_id TEXT;`);
-}
-// Structured outcome extracted by the Vapi analysis plan (see vapi.js).
-if (!callColumns.has("outcome")) {
-  db.exec(`ALTER TABLE calls ADD COLUMN outcome TEXT;`);
-}
-if (!callColumns.has("callback_time")) {
-  db.exec(`ALTER TABLE calls ADD COLUMN callback_time TEXT;`);
-}
-if (!callColumns.has("notes")) {
-  db.exec(`ALTER TABLE calls ADD COLUMN notes TEXT;`);
-}
-// Source tag for calls started via the inbound trigger endpoint.
-if (!callColumns.has("source_tag")) {
-  db.exec(`ALTER TABLE calls ADD COLUMN source_tag TEXT;`);
+for (const [col, type] of [
+  ["customer_number", "TEXT"],
+  ["duration_seconds", "INTEGER"],
+  ["batch_id", "TEXT"],
+  ["outcome", "TEXT"],
+  ["callback_time", "TEXT"],
+  ["notes", "TEXT"],
+  ["source_tag", "TEXT"],
+  ["client_id", "INTEGER"],
+]) {
+  if (!callColumns.has(col)) db.exec(`ALTER TABLE calls ADD COLUMN ${col} ${type};`);
 }
 
-const statements = {
-  upsert: db.prepare(`
-    INSERT INTO contacts (name, phone) VALUES (@name, @phone)
-    ON CONFLICT(name) DO UPDATE SET phone = excluded.phone
+// Contacts predating multi-tenancy have a global UNIQUE(name) and no client_id.
+// Rebuild the table so names are unique per client instead.
+const contactColumns = new Set(
+  db.prepare(`PRAGMA table_info(contacts)`).all().map((c) => c.name)
+);
+if (!contactColumns.has("client_id")) {
+  db.exec(`
+    CREATE TABLE contacts_new (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      client_id  INTEGER,
+      name       TEXT NOT NULL COLLATE NOCASE,
+      phone      TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(client_id, name)
+    );
+    INSERT INTO contacts_new (id, client_id, name, phone, created_at)
+      SELECT id, NULL, name, phone, created_at FROM contacts;
+    DROP TABLE contacts;
+    ALTER TABLE contacts_new RENAME TO contacts;
+  `);
+}
+
+// --- Default tenant + backfill ---------------------------------------------
+
+/**
+ * Ensure a "Default" client exists and return its id. Existing rows (from
+ * before multi-tenancy) are backfilled to it so current behavior is unchanged.
+ */
+function ensureDefaultClient() {
+  let row = db.prepare(`SELECT id FROM clients ORDER BY id ASC LIMIT 1`).get();
+  if (!row) {
+    const info = db
+      .prepare(
+        `INSERT INTO clients (name, username, outcome_values) VALUES ('Default', 'default', '{}')`
+      )
+      .run();
+    row = { id: Number(info.lastInsertRowid) };
+  }
+  return row.id;
+}
+
+export const DEFAULT_CLIENT_ID = ensureDefaultClient();
+
+db.prepare(`UPDATE contacts SET client_id = ? WHERE client_id IS NULL`).run(DEFAULT_CLIENT_ID);
+db.prepare(`UPDATE calls SET client_id = ? WHERE client_id IS NULL`).run(DEFAULT_CLIENT_ID);
+db.prepare(`UPDATE batches SET client_id = ? WHERE client_id IS NULL`).run(DEFAULT_CLIENT_ID);
+db.prepare(`UPDATE appointments SET client_id = ? WHERE client_id IS NULL`).run(DEFAULT_CLIENT_ID);
+
+// --- Prepared-statement cache ----------------------------------------------
+
+const stmtCache = new Map();
+function prep(sql) {
+  let s = stmtCache.get(sql);
+  if (!s) {
+    s = db.prepare(sql);
+    stmtCache.set(sql, s);
+  }
+  return s;
+}
+
+// Append a client scope to a query. `clientId == null` means "all clients"
+// (admin, no filter); a number restricts to that tenant.
+function scoped(sql, clientId, { where = false, table = "" } = {}) {
+  if (clientId == null) return sql;
+  const col = table ? `${table}.client_id` : "client_id";
+  return `${sql} ${where ? "WHERE" : "AND"} ${col} = @clientId`;
+}
+function bind(clientId, extra = {}) {
+  return clientId == null ? extra : { ...extra, clientId };
+}
+
+// --- Contacts ---------------------------------------------------------------
+
+export function addContact(name, phone, clientId = DEFAULT_CLIENT_ID) {
+  return prep(`
+    INSERT INTO contacts (client_id, name, phone) VALUES (@clientId, @name, @phone)
+    ON CONFLICT(client_id, name) DO UPDATE SET phone = excluded.phone
     RETURNING *;
-  `),
-  getByName: db.prepare(
-    `SELECT * FROM contacts WHERE name = ? COLLATE NOCASE;`
-  ),
-  upsertCall: db.prepare(`
-    INSERT INTO calls
-      (call_id, status, ended_reason, summary, transcript, recording_url,
-       customer_number, duration_seconds, outcome, callback_time, notes, updated_at)
-    VALUES
-      (@call_id, @status, @ended_reason, @summary, @transcript, @recording_url,
-       @customer_number, @duration_seconds, @outcome, @callback_time, @notes, datetime('now'))
-    ON CONFLICT(call_id) DO UPDATE SET
-      status           = excluded.status,
-      ended_reason     = excluded.ended_reason,
-      summary          = excluded.summary,
-      transcript       = excluded.transcript,
-      recording_url    = excluded.recording_url,
-      -- Preserve the number recorded at placement time if the report omits it.
-      customer_number  = COALESCE(excluded.customer_number, calls.customer_number),
-      duration_seconds = excluded.duration_seconds,
-      outcome          = excluded.outcome,
-      callback_time    = excluded.callback_time,
-      notes            = excluded.notes,
-      updated_at       = excluded.updated_at
-    RETURNING *;
-  `),
-  // Record a call at placement time so its batch_id is stored before the
-  // end-of-call webhook arrives. Deliberately does NOT touch report columns,
-  // and preserves an existing batch_id / number if the row already exists.
-  recordCall: db.prepare(`
-    INSERT INTO calls (call_id, batch_id, customer_number, status, source_tag, updated_at)
-    VALUES (@call_id, @batch_id, @customer_number, @status, @source_tag, datetime('now'))
-    ON CONFLICT(call_id) DO UPDATE SET
-      batch_id        = COALESCE(excluded.batch_id, calls.batch_id),
-      customer_number = COALESCE(excluded.customer_number, calls.customer_number),
-      status          = COALESCE(excluded.status, calls.status),
-      source_tag      = COALESCE(excluded.source_tag, calls.source_tag),
-      updated_at      = excluded.updated_at
-    RETURNING *;
-  `),
-  getCallById: db.prepare(`SELECT * FROM calls WHERE call_id = ?;`),
-  getCallsByBatch: db.prepare(`
-    SELECT calls.*, contacts.name AS contact_name
-    FROM calls
-    LEFT JOIN contacts ON contacts.phone = calls.customer_number
-    WHERE calls.batch_id = ?
-    ORDER BY calls.updated_at ASC;
-  `),
-  listContacts: db.prepare(
-    `SELECT * FROM contacts ORDER BY name COLLATE NOCASE;`
-  ),
-  getContactById: db.prepare(`SELECT * FROM contacts WHERE id = ?;`),
-  updateContact: db.prepare(`
+  `).get({ clientId, name, phone });
+}
+
+export function getContact(name, clientId = DEFAULT_CLIENT_ID) {
+  return prep(
+    `SELECT * FROM contacts WHERE name = @name COLLATE NOCASE AND client_id = @clientId;`
+  ).get({ name, clientId });
+}
+
+export function listContacts(clientId = null) {
+  const sql = scoped(
+    `SELECT * FROM contacts`,
+    clientId,
+    { where: true }
+  ) + ` ORDER BY name COLLATE NOCASE;`;
+  return clientId == null ? prep(sql).all() : prep(sql).all({ clientId });
+}
+
+export function getContactById(id, clientId = null) {
+  const sql = scoped(`SELECT * FROM contacts WHERE id = @id`, clientId);
+  return prep(sql).get(bind(clientId, { id }));
+}
+
+export function updateContact(id, name, phone) {
+  return prep(`
     UPDATE contacts SET name = @name, phone = @phone WHERE id = @id
     RETURNING *;
-  `),
-  deleteContact: db.prepare(`DELETE FROM contacts WHERE id = ?;`),
-  // Newest first; join the contact name by matching the dialed number.
-  listCalls: db.prepare(`
-    SELECT calls.*, contacts.name AS contact_name
-    FROM calls
-    LEFT JOIN contacts ON contacts.phone = calls.customer_number
-    ORDER BY calls.updated_at DESC;
-  `),
-  enqueueCall: db.prepare(`
-    INSERT INTO queued_calls (name, phone, objective, tag)
-    VALUES (@name, @phone, @objective, @tag)
-    RETURNING *;
-  `),
-  listQueued: db.prepare(`SELECT * FROM queued_calls ORDER BY id ASC;`),
-  deleteQueued: db.prepare(`DELETE FROM queued_calls WHERE id = ?;`),
-  countQueued: db.prepare(`SELECT COUNT(*) AS n FROM queued_calls;`),
-};
-
-export function addContact(name, phone) {
-  return statements.upsert.get({ name, phone });
+  `).get({ id, name, phone });
 }
 
-export function getContact(name) {
-  return statements.getByName.get(name);
+export function deleteContact(id, clientId = null) {
+  const sql = scoped(`DELETE FROM contacts WHERE id = @id`, clientId);
+  return prep(sql).run(bind(clientId, { id })).changes > 0;
 }
+
+// --- Calls ------------------------------------------------------------------
 
 /**
  * Insert or update a stored call report (from the Vapi end-of-call webhook).
- * Accepts a normalized report shape and returns the saved row.
+ * Never overwrites an existing client_id; when the row is new it defaults to
+ * the Default client. Also records an appointment when the outcome is booked.
  */
 export function saveCallReport({
   callId,
@@ -192,8 +243,31 @@ export function saveCallReport({
   callbackTime = null,
   notes = null,
 }) {
-  return statements.upsertCall.get({
+  const row = prep(`
+    INSERT INTO calls
+      (call_id, client_id, status, ended_reason, summary, transcript, recording_url,
+       customer_number, duration_seconds, outcome, callback_time, notes, updated_at)
+    VALUES
+      (@call_id, @client_id, @status, @ended_reason, @summary, @transcript, @recording_url,
+       @customer_number, @duration_seconds, @outcome, @callback_time, @notes, datetime('now'))
+    ON CONFLICT(call_id) DO UPDATE SET
+      status           = excluded.status,
+      ended_reason     = excluded.ended_reason,
+      summary          = excluded.summary,
+      transcript       = excluded.transcript,
+      recording_url    = excluded.recording_url,
+      customer_number  = COALESCE(excluded.customer_number, calls.customer_number),
+      duration_seconds = excluded.duration_seconds,
+      outcome          = excluded.outcome,
+      callback_time    = excluded.callback_time,
+      notes            = excluded.notes,
+      -- Preserve the tenant recorded at placement time.
+      client_id        = COALESCE(calls.client_id, excluded.client_id),
+      updated_at       = excluded.updated_at
+    RETURNING *;
+  `).get({
     call_id: callId,
+    client_id: DEFAULT_CLIENT_ID,
     status,
     ended_reason: endedReason,
     summary,
@@ -205,11 +279,28 @@ export function saveCallReport({
     callback_time: callbackTime,
     notes,
   });
+
+  // A booked call becomes an appointment (idempotent on call_id).
+  if (row && row.outcome === "booked") {
+    const contact = row.customer_number
+      ? prep(
+          `SELECT name FROM contacts WHERE phone = @phone AND client_id = @clientId;`
+        ).get({ phone: row.customer_number, clientId: row.client_id })
+      : null;
+    recordAppointment({
+      clientId: row.client_id,
+      callId: row.call_id,
+      contactName: contact?.name ?? null,
+      phone: row.customer_number,
+      scheduledTime: row.callback_time,
+    });
+  }
+  return row;
 }
 
 /**
  * Record a call at placement time (from make_call / call_list), storing its
- * batch_id and dialed number before any webhook report arrives.
+ * tenant and batch before any webhook report arrives.
  */
 export function recordPlacedCall({
   callId,
@@ -217,9 +308,22 @@ export function recordPlacedCall({
   customerNumber = null,
   status = "queued",
   sourceTag = null,
+  clientId = DEFAULT_CLIENT_ID,
 }) {
-  return statements.recordCall.get({
+  return prep(`
+    INSERT INTO calls (call_id, client_id, batch_id, customer_number, status, source_tag, updated_at)
+    VALUES (@call_id, @client_id, @batch_id, @customer_number, @status, @source_tag, datetime('now'))
+    ON CONFLICT(call_id) DO UPDATE SET
+      client_id       = COALESCE(calls.client_id, excluded.client_id),
+      batch_id        = COALESCE(excluded.batch_id, calls.batch_id),
+      customer_number = COALESCE(excluded.customer_number, calls.customer_number),
+      status          = COALESCE(excluded.status, calls.status),
+      source_tag      = COALESCE(excluded.source_tag, calls.source_tag),
+      updated_at      = excluded.updated_at
+    RETURNING *;
+  `).get({
     call_id: callId,
+    client_id: clientId,
     batch_id: batchId,
     customer_number: customerNumber,
     status,
@@ -227,64 +331,200 @@ export function recordPlacedCall({
   });
 }
 
+/** Look up a stored call by id, optionally scoped to a tenant. */
+export function getStoredCall(callId, clientId = null) {
+  const sql = scoped(`SELECT * FROM calls WHERE call_id = @callId`, clientId);
+  return prep(sql).get(bind(clientId, { callId }));
+}
+
+/** All calls in a batch (newest-placed first), with contact name resolved. */
+export function getBatchCalls(batchId, clientId = null) {
+  const sql =
+    scoped(
+      `SELECT calls.*, contacts.name AS contact_name
+       FROM calls
+       LEFT JOIN contacts ON contacts.phone = calls.customer_number
+                          AND contacts.client_id = calls.client_id
+       WHERE calls.batch_id = @batchId`,
+      clientId,
+      { table: "calls" }
+    ) + ` ORDER BY calls.updated_at ASC;`;
+  return prep(sql).all(bind(clientId, { batchId }));
+}
+
+/** Call history, newest first, with resolved contact name. Optionally scoped. */
+export function listCalls(clientId = null) {
+  const sql =
+    scoped(
+      `SELECT calls.*, contacts.name AS contact_name
+       FROM calls
+       LEFT JOIN contacts ON contacts.phone = calls.customer_number
+                          AND contacts.client_id = calls.client_id`,
+      clientId,
+      { where: true, table: "calls" }
+    ) + ` ORDER BY calls.updated_at DESC;`;
+  return clientId == null ? prep(sql).all() : prep(sql).all({ clientId });
+}
+
+// --- Batches ----------------------------------------------------------------
+
+export function recordBatch({ batchId, clientId = DEFAULT_CLIENT_ID, objective = null }) {
+  return prep(`
+    INSERT INTO batches (batch_id, client_id, objective) VALUES (@batchId, @clientId, @objective)
+    ON CONFLICT(batch_id) DO NOTHING;
+  `).run({ batchId, clientId, objective });
+}
+
+/** A batch row, scoped. Note: `objective` is admin-only (never sent to clients). */
+export function getBatch(batchId, clientId = null) {
+  const sql = scoped(`SELECT * FROM batches WHERE batch_id = @batchId`, clientId);
+  return prep(sql).get(bind(clientId, { batchId }));
+}
+
+// --- Appointments -----------------------------------------------------------
+
+export function recordAppointment({
+  clientId = DEFAULT_CLIENT_ID,
+  callId,
+  contactName = null,
+  phone = null,
+  scheduledTime = null,
+}) {
+  return prep(`
+    INSERT INTO appointments (client_id, call_id, contact_name, phone, scheduled_time)
+    VALUES (@clientId, @callId, @contactName, @phone, @scheduledTime)
+    ON CONFLICT(call_id) DO UPDATE SET
+      contact_name   = excluded.contact_name,
+      phone          = excluded.phone,
+      scheduled_time = excluded.scheduled_time;
+  `).run({ clientId, callId, contactName, phone, scheduledTime });
+}
+
+export function listAppointments(clientId = null) {
+  const sql = scoped(`SELECT * FROM appointments`, clientId, { where: true }) +
+    ` ORDER BY created_at DESC;`;
+  return clientId == null ? prep(sql).all() : prep(sql).all({ clientId });
+}
+
+// --- Metrics ----------------------------------------------------------------
+
 /**
- * Look up a stored call by id. Returns the raw row (snake_case columns) or
- * undefined if we have not received a webhook report for it yet.
+ * Per-(client, outcome) call counts, optionally scoped to one tenant. Used to
+ * build the client results header and outcome breakdown.
  */
-export function getStoredCall(callId) {
-  return statements.getCallById.get(callId);
+export function outcomeCounts(clientId = null) {
+  const sql = scoped(
+    `SELECT client_id, outcome, COUNT(*) AS n FROM calls WHERE outcome IS NOT NULL`,
+    clientId
+  ) + ` GROUP BY client_id, outcome;`;
+  return clientId == null ? prep(sql).all() : prep(sql).all({ clientId });
 }
 
-/**
- * All calls belonging to a batch, newest-placed first, with contact name
- * resolved by dialed number.
- */
-export function getBatchCalls(batchId) {
-  return statements.getCallsByBatch.all(batchId);
+/** Total number of calls, optionally scoped. */
+export function countCalls(clientId = null) {
+  const sql = scoped(`SELECT COUNT(*) AS n FROM calls`, clientId, { where: true });
+  const row = clientId == null ? prep(sql).get() : prep(sql).get({ clientId });
+  return row.n;
 }
 
-// --- Dashboard helpers -----------------------------------------------------
+// --- Clients ----------------------------------------------------------------
 
-export function listContacts() {
-  return statements.listContacts.all();
+function parseValues(json) {
+  try {
+    const v = JSON.parse(json || "{}");
+    return v && typeof v === "object" ? v : {};
+  } catch {
+    return {};
+  }
 }
 
-export function getContactById(id) {
-  return statements.getContactById.get(id);
+/** Public (admin) view of a client row, with outcome_values parsed. */
+function clientView(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    name: row.name,
+    username: row.username,
+    has_login: Boolean(row.password_hash),
+    outcome_values: parseValues(row.outcome_values),
+    created_at: row.created_at,
+  };
 }
 
-export function updateContact(id, name, phone) {
-  return statements.updateContact.get({ id, name, phone });
+export function createClient({ name, username = null, passwordHash = null, outcomeValues = {} }) {
+  const info = prep(`
+    INSERT INTO clients (name, username, password_hash, outcome_values)
+    VALUES (@name, @username, @passwordHash, @outcomeValues)
+  `).run({
+    name,
+    username,
+    passwordHash,
+    outcomeValues: JSON.stringify(outcomeValues || {}),
+  });
+  return clientView(getClientRow(Number(info.lastInsertRowid)));
 }
 
-export function deleteContact(id) {
-  return statements.deleteContact.run(id).changes > 0;
+function getClientRow(id) {
+  return prep(`SELECT * FROM clients WHERE id = ?;`).get(id);
 }
 
-export function listCalls() {
-  return statements.listCalls.all();
+export function getClientById(id) {
+  return clientView(getClientRow(id));
+}
+
+/** Raw client row by username (includes password_hash) — for auth only. */
+export function getClientAuthByUsername(username) {
+  return prep(`SELECT * FROM clients WHERE username = ? COLLATE NOCASE;`).get(username);
+}
+
+export function listClients() {
+  return prep(`SELECT * FROM clients ORDER BY name COLLATE NOCASE;`).all().map(clientView);
+}
+
+export function setClientOutcomeValues(id, valuesObj) {
+  prep(`UPDATE clients SET outcome_values = @v WHERE id = @id;`).run({
+    id,
+    v: JSON.stringify(valuesObj || {}),
+  });
+  return getClientById(id);
+}
+
+export function getClientOutcomeValues(id) {
+  const row = getClientRow(id);
+  return row ? parseValues(row.outcome_values) : {};
+}
+
+export function setClientLogin(id, username, passwordHash) {
+  prep(`UPDATE clients SET username = @username, password_hash = @passwordHash WHERE id = @id;`).run(
+    { id, username, passwordHash }
+  );
+  return getClientById(id);
+}
+
+export function getDefaultClientId() {
+  return DEFAULT_CLIENT_ID;
 }
 
 // --- Queued (out-of-hours) trigger calls ------------------------------------
 
-/** Add a call to the out-of-hours queue. */
 export function enqueueCall({ name, phone, objective, tag = null }) {
-  return statements.enqueueCall.get({ name, phone, objective, tag });
+  return prep(`
+    INSERT INTO queued_calls (name, phone, objective, tag)
+    VALUES (@name, @phone, @objective, @tag)
+    RETURNING *;
+  `).get({ name, phone, objective, tag });
 }
 
-/** All queued calls, oldest first (FIFO). */
 export function listQueuedCalls() {
-  return statements.listQueued.all();
+  return prep(`SELECT * FROM queued_calls ORDER BY id ASC;`).all();
 }
 
-/** Remove a queued call once it has been placed (or abandoned). */
 export function deleteQueuedCall(id) {
-  return statements.deleteQueued.run(id).changes > 0;
+  return prep(`DELETE FROM queued_calls WHERE id = ?;`).run(id).changes > 0;
 }
 
-/** Count of calls currently waiting in the queue. */
 export function countQueuedCalls() {
-  return statements.countQueued.get().n;
+  return prep(`SELECT COUNT(*) AS n FROM queued_calls;`).get().n;
 }
 
 export default db;

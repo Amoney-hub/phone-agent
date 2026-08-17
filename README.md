@@ -239,6 +239,38 @@ Notes:
 - If auth is **not** configured, the dashboard and API fail closed (redirect /
   `503`) rather than exposing your data.
 
+## Multi-tenancy & client access
+
+Contacts, calls, appointments, and batches each belong to a **client** (tenant).
+There are two roles:
+
+- **admin** (the `DASHBOARD_USER` above): full access across all clients. Sees
+  the whole dashboard plus a **client switcher** (top-right) to view "All
+  clients" or scope everything to one, and a **Client settings** panel to create
+  clients, set each client's **per-outcome dollar values**, and set a client
+  login.
+- **client**: signs in to a **read-only** workspace showing only their own data —
+  a results header (**jobs booked / shifts filled** + **estimated value** from
+  the admin-set per-outcome values), an outcome breakdown, and their call log
+  with transcripts and recording playback. Clients never see other tenants'
+  data, prompts/objectives, per-minute costs, or admin controls (enforced
+  server-side, not just hidden in the UI).
+
+Existing data is migrated to a **Default** client on first launch, so a
+single-tenant setup keeps working unchanged (the MCP tools and inbound triggers
+operate on the Default client).
+
+Create a client and give them a login, either from **Client settings** in the
+dashboard, or on the CLI:
+
+```bash
+npm run add-client -- "Acme Plumbing" acme s3cret '{"booked":200,"interested":40}'
+```
+
+The estimated value is `Σ (calls with outcome × that outcome's dollar value)`,
+priced per client. Admins can optionally set `COST_PER_MINUTE` for an
+admin-only cost estimate that is never exposed to clients.
+
 ## Inbound call triggers
 
 External systems (CRMs, form handlers, Zapier, etc.) can start calls by posting
@@ -333,18 +365,21 @@ src/
   index.js    MCP server: registers the contact/call tools, picks local/remote backend
   remote.js   HTTP client + backend used when REMOTE_API_URL is set (bearer auth)
   calls.js    Shared call ops (place/batch/fetch) used by the server and local MCP mode
-  db.js       SQLite storage (better-sqlite3): contacts + cached call reports (batch + outcome columns)
+  db.js       SQLite storage (better-sqlite3): tenants, contacts, calls, batches, appointments
+  metrics.js  Client results: jobs booked / estimated value / outcome breakdown
   twilio.js   Twilio SMS client
   vapi.js     Vapi call client + system-prompt builder
-  auth.js     Dashboard session auth (bcrypt) + bearer-or-session API guard
+  auth.js     Session auth (admin + client roles, bcrypt), scoping + bearer guard
   trigger.js  Inbound trigger endpoint: bearer auth, rate limit, out-of-hours queue
   callhours.js   Business-hours window parsing + timezone evaluation
   webhook.js  Express server (port 3117): Vapi webhook + dashboard + /api routes
-  dashboard.js   Loads and serves the dashboard + login HTML
-  dashboard.html Self-contained dark-theme dashboard (HTML/CSS/JS)
+  dashboard.js   Loads and serves the admin dashboard, client, and login HTML
+  dashboard.html Admin dashboard (client switcher, results, config) — HTML/CSS/JS
+  client.html    Read-only client results workspace — HTML/CSS/JS
   login.html     Self-contained login page
 scripts/
   hash-password.js  Generate a bcrypt hash for DASHBOARD_PASSWORD_HASH
+  add-client.js     Create a client tenant with an optional login + values
 .env.example  Template for required credentials
 ```
 

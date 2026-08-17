@@ -10,7 +10,8 @@
   "scripts": {
     "start": "node src/index.js",
     "webhook": "node src/webhook.js",
-    "hash-password": "node scripts/hash-password.js"
+    "hash-password": "node scripts/hash-password.js",
+    "add-client": "node scripts/add-client.js"
   },
   "engines": {
     "node": ">=18"

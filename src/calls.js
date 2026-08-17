@@ -4,7 +4,14 @@
 
 import crypto from "node:crypto";
 
-import { getContact, recordPlacedCall, getStoredCall, getBatchCalls } from "./db.js";
+import {
+  getContact,
+  recordPlacedCall,
+  getStoredCall,
+  getBatchCalls,
+  recordBatch,
+  DEFAULT_CLIENT_ID,
+} from "./db.js";
 import { createCall, getCall } from "./vapi.js";
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -13,8 +20,8 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // and to space out simultaneous ringing.
 export const BATCH_STAGGER_MS = 3000;
 
-function resolveContact(name) {
-  const contact = getContact(name);
+function resolveContact(name, clientId) {
+  const contact = getContact(name, clientId);
   if (!contact) {
     throw new Error(`No contact named "${name}". Add one first with add_contact.`);
   }
@@ -22,16 +29,17 @@ function resolveContact(name) {
 }
 
 /**
- * Place a single call to a saved contact.
+ * Place a single call to a saved contact within a tenant.
  * @returns {{call_id: string, status: string, contact: {name: string, phone: string}}}
  */
-export async function placeCall({ name, objective, voicemailMessage }) {
-  const contact = resolveContact(name);
+export async function placeCall({ name, objective, voicemailMessage, clientId = DEFAULT_CLIENT_ID }) {
+  const contact = resolveContact(name, clientId);
   const call = await createCall(contact.phone, objective, { voicemailMessage });
   recordPlacedCall({
     callId: call.id,
     customerNumber: contact.phone,
     status: call.status ?? "queued",
+    clientId,
   });
   return {
     call_id: call.id,
@@ -46,20 +54,28 @@ export async function placeCall({ name, objective, voicemailMessage }) {
  * rather than aborting the batch.
  * @returns {{batch_id: string, results: Array<object>}}
  */
-export async function placeBatch({ names, objective, voicemailMessage, batchId }) {
+export async function placeBatch({
+  names,
+  objective,
+  voicemailMessage,
+  batchId,
+  clientId = DEFAULT_CLIENT_ID,
+}) {
   const batch_id = batchId || `batch_${crypto.randomUUID()}`;
+  recordBatch({ batchId: batch_id, clientId, objective });
   const results = [];
   for (let i = 0; i < names.length; i++) {
     if (i > 0) await sleep(BATCH_STAGGER_MS);
     const name = names[i];
     try {
-      const contact = resolveContact(name);
+      const contact = resolveContact(name, clientId);
       const call = await createCall(contact.phone, objective, { voicemailMessage });
       recordPlacedCall({
         callId: call.id,
         batchId: batch_id,
         customerNumber: contact.phone,
         status: call.status ?? "queued",
+        clientId,
       });
       results.push({
         name: contact.name,
@@ -80,8 +96,8 @@ export async function placeBatch({ names, objective, voicemailMessage, batchId }
  * (instant), otherwise the Vapi API. Returns a normalized snake_case object.
  * @returns {Promise<{source: "webhook"|"api", call: object}>}
  */
-export async function getCallResult(callId) {
-  const stored = getStoredCall(callId);
+export async function getCallResult(callId, clientId = null) {
+  const stored = getStoredCall(callId, clientId);
   if (stored) {
     return {
       source: "webhook",
@@ -98,6 +114,11 @@ export async function getCallResult(callId) {
         batch_id: stored.batch_id,
       },
     };
+  }
+  // Not stored yet. Only fall back to the Vapi API for unscoped (admin)
+  // lookups — a tenant-scoped miss must not leak another client's call.
+  if (clientId != null) {
+    throw new Error(`No call ${callId} found.`);
   }
   const call = await getCall(callId); // Vapi client returns camelCase
   return {
@@ -121,6 +142,6 @@ export async function getCallResult(callId) {
  * Fetch all calls in a batch (rows include the resolved `contact_name`).
  * @returns {Array<object>}
  */
-export function getBatchResult(batchId) {
-  return getBatchCalls(batchId);
+export function getBatchResult(batchId, clientId = null) {
+  return getBatchCalls(batchId, clientId);
 }

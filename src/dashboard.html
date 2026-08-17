@@ -134,12 +134,28 @@
   }
   .toast.show { opacity: 1; }
   .toast.err { border-color: var(--bad); color: var(--bad); }
+  select { font: inherit; color: var(--text); background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
+  select:focus { outline: none; border-color: var(--accent-2); }
+  .cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  @media (max-width: 680px) { .cards { grid-template-columns: 1fr; } }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; }
+  .card .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .5px; }
+  .card .value { font-size: 30px; font-weight: 700; margin-top: 6px; }
+  .card .value.good { color: var(--good); }
+  .valgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; }
+  .valgrid label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+  .valgrid input { width: 100%; }
+  .row-gap { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .mt { margin-top: 14px; }
 </style>
 </head>
 <body>
 <header>
   <h1>phone-agent <span class="dim">dashboard</span></h1>
   <div class="status-strip" id="statusStrip">
+    <label class="chip" style="gap:6px"><span class="muted">Client</span>
+      <select id="clientSwitcher" style="background:transparent;border:none;color:var(--text);font:inherit;outline:none;padding:0"></select>
+    </label>
     <span class="chip"><span class="dot" id="vapiDot"></span> Vapi</span>
     <span class="chip"><span class="dot" id="twilioDot"></span> Twilio</span>
     <button class="chip" id="logoutBtn" title="Sign out" style="cursor:pointer">Log out</button>
@@ -147,6 +163,22 @@
 </header>
 
 <main>
+  <section id="resultsSection">
+    <h2>Results <span class="muted" id="resultsScope"></span></h2>
+    <div class="cards">
+      <div class="card"><div class="label">Jobs booked / shifts filled</div><div class="value" id="rJobs">—</div></div>
+      <div class="card"><div class="label">Estimated value</div><div class="value good" id="rValue">—</div></div>
+      <div class="card"><div class="label">Calls made</div><div class="value" id="rCalls">—</div></div>
+    </div>
+  </section>
+
+  <section id="clientAdminSection">
+    <h2>Client settings</h2>
+    <div class="panel" style="padding:16px">
+      <div id="clientConfig"></div>
+    </div>
+  </section>
+
   <section id="contactsSection">
     <h2>Contacts</h2>
     <div class="panel">
@@ -230,6 +262,120 @@ function fmtDuration(sec) {
   return m + ":" + s;
 }
 
+// --- Multi-tenant scope ---------------------------------------------------
+let ME = null;
+let SELECTED_CLIENT = "";        // "" = all clients
+let CURRENCY = "USD";
+const OUTCOMES = ["reached", "voicemail", "not_interested", "interested", "booked", "callback_requested"];
+const clientById = {};
+
+// Append the selected client scope to a URL (admin only).
+function q(url) {
+  if (!SELECTED_CLIENT) return url;
+  return url + (url.includes("?") ? "&" : "?") + "client_id=" + encodeURIComponent(SELECTED_CLIENT);
+}
+function money(n) {
+  try {
+    return new Intl.NumberFormat(undefined, { style: "currency", currency: CURRENCY, maximumFractionDigits: 0 }).format(n || 0);
+  } catch { return "$" + (n || 0); }
+}
+
+async function loadMe() {
+  ME = await api("GET", "/api/me");
+  const sw = $("#clientSwitcher");
+  sw.innerHTML = "";
+  const optAll = document.createElement("option");
+  optAll.value = ""; optAll.textContent = "All clients";
+  sw.appendChild(optAll);
+  for (const c of (ME.clients || [])) {
+    clientById[c.id] = c;
+    const o = document.createElement("option");
+    o.value = String(c.id); o.textContent = c.name;
+    sw.appendChild(o);
+  }
+  sw.value = SELECTED_CLIENT;
+}
+
+$("#clientSwitcher").addEventListener("change", (e) => {
+  SELECTED_CLIENT = e.target.value;
+  refreshAll();
+});
+
+async function loadResults() {
+  const r = await api("GET", q("/api/results"));
+  CURRENCY = r.currency || "USD";
+  $("#rJobs").textContent = r.jobs_booked;
+  $("#rValue").textContent = money(r.estimated_value);
+  $("#rCalls").textContent = r.total_calls;
+  const name = SELECTED_CLIENT && clientById[SELECTED_CLIENT] ? clientById[SELECTED_CLIENT].name : "all clients";
+  $("#resultsScope").textContent = "· " + name;
+}
+
+function renderClientConfig() {
+  const box = $("#clientConfig");
+  if (!SELECTED_CLIENT) {
+    box.innerHTML =
+      '<div class="muted">Select a client above to edit its per-outcome values and login. Or create one:</div>' +
+      '<form class="row-gap mt" id="newClientForm"><input type="text" id="newClientName" placeholder="New client name" required />' +
+      '<button class="primary" type="submit">Create client</button></form>';
+    $("#newClientForm").onsubmit = async (ev) => {
+      ev.preventDefault();
+      const name = $("#newClientName").value.trim(); if (!name) return;
+      try {
+        const c = await api("POST", "/api/clients", { name });
+        toast("Client created");
+        await loadMe();
+        SELECTED_CLIENT = String(c.id); $("#clientSwitcher").value = SELECTED_CLIENT;
+        refreshAll();
+      } catch (e) { toast(e.message, true); }
+    };
+    return;
+  }
+  const c = clientById[SELECTED_CLIENT] || { outcome_values: {} };
+  const vals = c.outcome_values || {};
+  const inputs = OUTCOMES.map((o) =>
+    '<label>' + o + '<input type="number" step="1" min="0" data-outcome="' + o + '" value="' +
+    (vals[o] != null ? esc(vals[o]) : "") + '" placeholder="0" /></label>'
+  ).join("");
+  box.innerHTML =
+    '<div class="muted">Per-outcome dollar value for <strong>' + esc(c.name) + '</strong> — drives the estimated value.</div>' +
+    '<div class="valgrid mt" id="valGrid">' + inputs + '</div>' +
+    '<div class="row-gap mt"><button class="primary" id="saveVals">Save values</button></div>' +
+    '<hr style="border-color:var(--border);margin:16px 0" />' +
+    '<div class="muted">Client login' + (c.has_login ? ' — set for user "' + esc(c.username || "") + '".' : ' — not set yet.') +
+    ' Lets this client sign in to their read-only workspace.</div>' +
+    '<form class="row-gap mt" id="loginForm"><input type="text" id="clUser" placeholder="username" value="' + esc(c.username || "") + '" required />' +
+    '<input type="password" id="clPass" placeholder="new password" required />' +
+    '<button class="primary" type="submit">Set login</button></form>';
+  $("#saveVals").onclick = async () => {
+    const outcome_values = {};
+    box.querySelectorAll("#valGrid input").forEach((el) => {
+      const v = el.value.trim(); if (v !== "") outcome_values[el.dataset.outcome] = Number(v);
+    });
+    try {
+      clientById[SELECTED_CLIENT] = await api("PUT", "/api/clients/" + SELECTED_CLIENT + "/values", { outcome_values });
+      toast("Values saved"); loadResults();
+    } catch (e) { toast(e.message, true); }
+  };
+  $("#loginForm").onsubmit = async (ev) => {
+    ev.preventDefault();
+    const username = $("#clUser").value.trim(); const password = $("#clPass").value;
+    try {
+      clientById[SELECTED_CLIENT] = await api("PUT", "/api/clients/" + SELECTED_CLIENT + "/login", { username, password });
+      toast("Login set"); renderClientConfig();
+    } catch (e) { toast(e.message, true); }
+  };
+}
+
+async function refreshAll() {
+  await Promise.all([
+    loadResults().catch((e) => toast(e.message, true)),
+    loadContacts().catch((e) => toast(e.message, true)),
+    loadCalls().catch((e) => toast(e.message, true)),
+  ]);
+  renderClientConfig();
+}
+
 // --- Status ---------------------------------------------------------------
 async function loadStatus() {
   try {
@@ -247,7 +393,7 @@ function setDot(sel, on) {
 
 // --- Contacts -------------------------------------------------------------
 async function loadContacts() {
-  const rows = await api("GET", "/api/contacts");
+  const rows = await api("GET", q("/api/contacts"));
   const body = $("#contactsBody");
   body.innerHTML = "";
   $("#contactsEmpty").hidden = rows.length > 0;
@@ -305,7 +451,7 @@ $("#addForm").addEventListener("submit", async (ev) => {
   const phone = $("#addPhone").value.trim();
   if (!name || !phone) return;
   try {
-    await api("POST", "/api/contacts", { name, phone });
+    await api("POST", q("/api/contacts"), { name, phone });
     $("#addName").value = "";
     $("#addPhone").value = "";
     toast("Contact added");
@@ -317,7 +463,7 @@ $("#addForm").addEventListener("submit", async (ev) => {
 let allCalls = [];
 
 async function loadCalls() {
-  allCalls = await api("GET", "/api/calls");
+  allCalls = await api("GET", q("/api/calls"));
   renderCalls();
 }
 
@@ -414,14 +560,17 @@ $("#logoutBtn").addEventListener("click", async () => {
 
 // --- Boot -----------------------------------------------------------------
 async function boot() {
+  await loadMe().catch((e) => toast(e.message, true));
   await Promise.all([
     loadStatus(),
+    loadResults().catch((e) => toast(e.message, true)),
     loadContacts().catch((e) => toast(e.message, true)),
     loadCalls().catch((e) => toast(e.message, true)),
   ]);
+  renderClientConfig();
 }
 boot();
-setInterval(loadCalls, 15000);
+setInterval(() => loadCalls().catch(() => {}), 15000);
 </script>
 </body>
 </html>
