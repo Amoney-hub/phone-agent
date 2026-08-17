@@ -33,6 +33,16 @@ import { sendSms } from "./twilio.js";
 const REMOTE = process.env.REMOTE_API_URL;
 let backend;
 
+// Optional multi-tenant attribution: a client name or id. When omitted, the
+// Default client is used.
+const clientParam = z
+  .string()
+  .min(1)
+  .optional()
+  .describe(
+    "Optional client (name or id) to attribute this to. Defaults to the Default client."
+  );
+
 const server = new McpServer({
   name: "phone-agent",
   version: "1.0.0",
@@ -69,18 +79,19 @@ server.registerTool(
   {
     title: "Add Contact",
     description:
-      "Add or update a contact. Stores the name and phone number (E.164, e.g. +15551234567).",
+      "Add or update a contact. Stores the name and phone number (E.164, e.g. +15551234567). Optionally attribute to a specific client.",
     inputSchema: {
-      name: z.string().min(1).describe("Contact's name (unique, case-insensitive)."),
+      name: z.string().min(1).describe("Contact's name (unique per client, case-insensitive)."),
       phone: z
         .string()
         .min(1)
         .describe("Phone number in E.164 format, e.g. +15551234567."),
+      client: clientParam,
     },
   },
-  async ({ name, phone }) => {
+  async ({ name, phone, client }) => {
     try {
-      const contact = await backend.addContact(name, phone);
+      const contact = await backend.addContact(name, phone, client);
       return textResult(
         `Saved contact "${contact.name}" with number ${contact.phone}.`
       );
@@ -98,9 +109,10 @@ server.registerTool(
     inputSchema: {
       name: z.string().min(1).describe("Name of a saved contact."),
       message: z.string().min(1).describe("Text message body to send."),
+      client: clientParam,
     },
   },
-  async ({ name, message }) => {
+  async ({ name, message, client }) => {
     try {
       if (!isTextingConfigured()) {
         return errorResult(
@@ -109,7 +121,7 @@ server.registerTool(
           )
         );
       }
-      const contact = await backend.getContactByName(name);
+      const contact = await backend.getContactByName(name, client);
       if (!contact) {
         throw new Error(
           `No contact named "${name}". Add one first with add_contact.`
@@ -144,11 +156,12 @@ server.registerTool(
         .describe(
           "Optional override for the message left if the call reaches voicemail. If omitted, one is generated from the objective."
         ),
+      client: clientParam,
     },
   },
-  async ({ name, objective, voicemail_message }) => {
+  async ({ name, objective, voicemail_message, client }) => {
     try {
-      const r = await backend.placeCall(name, objective, voicemail_message);
+      const r = await backend.placeCall(name, objective, voicemail_message, client);
       return textResult(
         `Calling ${r.contact.name} (${r.contact.phone}).\ncall_id: ${r.call_id}\nstatus: ${r.status}\nUse get_call_result with this call_id to fetch the transcript and summary once the call ends.`
       );
@@ -224,14 +237,16 @@ server.registerTool(
         .describe(
           "Optional override for the message left if a call reaches voicemail. Applies to every call in the batch. If omitted, one is generated from the objective."
         ),
+      client: clientParam,
     },
   },
-  async ({ names, objective, voicemail_message }) => {
+  async ({ names, objective, voicemail_message, client }) => {
     try {
       const { batch_id, results } = await backend.placeBatch(
         names,
         objective,
-        voicemail_message
+        voicemail_message,
+        client
       );
 
       const rows = results.map((r) => ({
@@ -321,21 +336,31 @@ async function makeBackend() {
   const db = await import("./db.js");
   const calls = await import("./calls.js");
   console.error("phone-agent MCP server: using local SQLite.");
+
+  // Resolve a client reference (name or id) to a client id, defaulting to the
+  // Default client when none is given, and erroring on an unknown reference.
+  const clientId = (ref) => {
+    if (ref == null || ref === "") return db.DEFAULT_CLIENT_ID;
+    const id = db.resolveClientId(ref);
+    if (id == null) throw new Error(`Unknown client "${ref}".`);
+    return id;
+  };
+
   return {
     mode: "local",
-    addContact(name, phone) {
-      const c = db.addContact(name, phone);
+    addContact(name, phone, client) {
+      const c = db.addContact(name, phone, clientId(client));
       return { name: c.name, phone: c.phone };
     },
-    getContactByName(name) {
-      const c = db.getContact(name);
+    getContactByName(name, client) {
+      const c = db.getContact(name, clientId(client));
       return c ? { name: c.name, phone: c.phone } : null;
     },
-    placeCall(name, objective, vm) {
-      return calls.placeCall({ name, objective, voicemailMessage: vm });
+    placeCall(name, objective, vm, client) {
+      return calls.placeCall({ name, objective, voicemailMessage: vm, clientId: clientId(client) });
     },
-    placeBatch(names, objective, vm) {
-      return calls.placeBatch({ names, objective, voicemailMessage: vm });
+    placeBatch(names, objective, vm, client) {
+      return calls.placeBatch({ names, objective, voicemailMessage: vm, clientId: clientId(client) });
     },
     getCallResult(id) {
       return calls.getCallResult(id);

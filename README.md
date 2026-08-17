@@ -13,10 +13,10 @@ contacts, send text messages, and place autonomous phone calls.
 
 | Tool | Arguments | Description |
 | --- | --- | --- |
-| `add_contact` | `name`, `phone` | Add or update a contact. `phone` should be E.164, e.g. `+15551234567`. |
-| `send_text` | `name`, `message` | Send an SMS to a saved contact via Twilio. |
-| `make_call` | `name`, `objective`, *(optional)* `voicemail_message` | Place a Vapi call to a saved contact. Returns a `call_id`. |
-| `call_list` | `names[]`, `objective`, *(optional)* `voicemail_message` | Place calls to several contacts with the same objective, staggered a few seconds apart. Returns a `batch_id` and a table of names/`call_id`s. |
+| `add_contact` | `name`, `phone`, *(optional)* `client` | Add or update a contact. `phone` should be E.164, e.g. `+15551234567`. |
+| `send_text` | `name`, `message`, *(optional)* `client` | Send an SMS to a saved contact via Twilio. |
+| `make_call` | `name`, `objective`, *(optional)* `voicemail_message`, `client` | Place a Vapi call to a saved contact. Returns a `call_id`. |
+| `call_list` | `names[]`, `objective`, *(optional)* `voicemail_message`, `client` | Place calls to several contacts with the same objective, staggered a few seconds apart. Returns a `batch_id` and a table of names/`call_id`s. |
 | `get_call_result` | `call_id` | Fetch a call's status, structured outcome, transcript, and summary. |
 | `get_batch_result` | `batch_id` | Fetch the outcome of every call in a batch placed by `call_list`. |
 
@@ -271,6 +271,24 @@ The estimated value is `Σ (calls with outcome × that outcome's dollar value)`,
 priced per client. Admins can optionally set `COST_PER_MINUTE` for an
 admin-only cost estimate that is never exposed to clients.
 
+### Per-client attribution
+
+Every client gets its own **trigger API key** (`ck_…`), shown in **Client
+settings** (with a Copy/Regenerate control) and mapped to that client's id.
+Calls are attributed to whichever key or parameter was used, falling back to the
+Default client only when neither is given:
+
+- **Inbound triggers**: calling `POST /api/trigger/call` with a **client's key**
+  attributes the call to that client; the **global `TRIGGER_API_KEY`** attributes
+  to Default. A client key also grants read-only, tenant-scoped access to the
+  rest of `/api` (same as that client's login).
+- **MCP tools**: `add_contact`, `send_text`, `make_call`, and `call_list` take an
+  optional **`client`** parameter (name or id) to act on behalf of a specific
+  client. Omit it for the Default client. (In remote mode this is forwarded to
+  the hosted API; the admin `TRIGGER_API_KEY` bearer authorizes it.)
+- **Dashboard**: admins can also place under the currently selected client via
+  the client switcher, or pass `"client"` in the `POST /api/calls` body.
+
 ## Inbound call triggers
 
 External systems (CRMs, form handlers, Zapier, etc.) can start calls by posting
@@ -279,7 +297,10 @@ to **`POST /api/trigger/call`**. Unlike the rest of `/api`, this route uses a
 machines that can't log in.
 
 1. **Enable it** by setting `TRIGGER_API_KEY` in `.env` to a long random string.
-   Until it's set, the endpoint returns `503` (disabled).
+   Until it's set, the endpoint returns `503` (disabled). Use the **global**
+   `TRIGGER_API_KEY` for calls that should attribute to the Default client, or a
+   **client's own key** (from Client settings) to attribute to that client — see
+   [Per-client attribution](#per-client-attribution).
 
 2. **Call it** with the token and a JSON body:
 

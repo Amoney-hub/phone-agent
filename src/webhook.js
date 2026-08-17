@@ -34,6 +34,8 @@ import {
   setClientOutcomeValues,
   setClientLogin,
   getDefaultClientId,
+  resolveClientId,
+  regenerateClientApiKey,
 } from "./db.js";
 import { renderDashboard, renderLogin, renderClient } from "./dashboard.js";
 import { resolveOutcome } from "./vapi.js";
@@ -163,6 +165,21 @@ function serializeCall(row, role) {
   return base;
 }
 
+/**
+ * Resolve the client to attribute a write to (admin routes only). Priority:
+ * an explicit `client` (name or id) in the body, then the `?client_id=` scope
+ * (dashboard switcher), then the Default client. Returns `{ id }` or `{ error }`.
+ */
+function resolveTargetClientId(req) {
+  const ref = req.body?.client;
+  if (ref != null && String(ref).trim() !== "") {
+    const id = resolveClientId(ref);
+    return id == null ? { error: `Unknown client "${ref}".` } : { id };
+  }
+  const { clientId } = resolveScope(req);
+  return { id: clientId ?? getDefaultClientId() };
+}
+
 // Who am I — drives the UI (role, client, and the admin client switcher list).
 app.get("/api/me", (req, res) => {
   const p = getPrincipal(req);
@@ -247,6 +264,15 @@ app.put("/api/clients/:id/login", requireAdmin, async (req, res) => {
   }
 });
 
+// Rotate a client's trigger API key.
+app.post("/api/clients/:id/key", requireAdmin, (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || !getClientById(id)) {
+    return res.status(404).json({ error: "client not found." });
+  }
+  res.json(regenerateClientApiKey(id));
+});
+
 // --- Results (admin and clients; always tenant-scoped) ---------------------
 
 app.get("/api/results", (req, res) => {
@@ -265,11 +291,10 @@ app.post("/api/contacts", requireAdmin, (req, res) => {
   if (!name || !phone) {
     return res.status(400).json({ error: "name and phone are required." });
   }
-  const { clientId } = resolveScope(req);
+  const target = resolveTargetClientId(req);
+  if (target.error) return res.status(400).json({ error: target.error });
   try {
-    res
-      .status(201)
-      .json(addContact(String(name).trim(), String(phone).trim(), clientId ?? getDefaultClientId()));
+    res.status(201).json(addContact(String(name).trim(), String(phone).trim(), target.id));
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
@@ -317,15 +342,16 @@ app.post("/api/calls", requireAdmin, async (req, res) => {
   if (!name || !objective) {
     return res.status(400).json({ error: "name and objective are required." });
   }
-  const { clientId } = resolveScope(req);
+  const target = resolveTargetClientId(req);
+  if (target.error) return res.status(400).json({ error: target.error });
   try {
     const result = await placeCall({
       name: String(name),
       objective: String(objective),
       voicemailMessage: voicemail_message,
-      clientId: clientId ?? getDefaultClientId(),
+      clientId: target.id,
     });
-    res.status(201).json(result);
+    res.status(201).json({ ...result, client_id: target.id });
   } catch (err) {
     // A missing contact is a 404; anything else (Vapi failure) is a 502.
     const notFound = /^No contact named/.test(err.message);
@@ -339,15 +365,16 @@ app.post("/api/calls/batch", requireAdmin, async (req, res) => {
   if (!Array.isArray(names) || names.length === 0 || !objective) {
     return res.status(400).json({ error: "names[] and objective are required." });
   }
-  const { clientId } = resolveScope(req);
+  const target = resolveTargetClientId(req);
+  if (target.error) return res.status(400).json({ error: target.error });
   try {
     const result = await placeBatch({
       names: names.map(String),
       objective: String(objective),
       voicemailMessage: voicemail_message,
-      clientId: clientId ?? getDefaultClientId(),
+      clientId: target.id,
     });
-    res.json(result);
+    res.json({ ...result, client_id: target.id });
   } catch (err) {
     res.status(502).json({ error: err.message });
   }

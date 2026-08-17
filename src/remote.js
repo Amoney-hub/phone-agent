@@ -40,14 +40,29 @@ async function apiRequest(method, path, body) {
   return data;
 }
 
-// Thin wrappers over the hosted routes.
+const clientBody = (client) => (client != null && client !== "" ? { client } : {});
+
+// Thin wrappers over the hosted routes. `client` (name or id) attributes the
+// operation to a specific tenant; the hosted API resolves it.
 export const remote = {
-  addContact: (name, phone) => apiRequest("POST", "/api/contacts", { name, phone }),
-  listContacts: () => apiRequest("GET", "/api/contacts"),
-  placeCall: (name, objective, voicemailMessage) =>
-    apiRequest("POST", "/api/calls", { name, objective, voicemail_message: voicemailMessage }),
-  placeBatch: (names, objective, voicemailMessage) =>
-    apiRequest("POST", "/api/calls/batch", { names, objective, voicemail_message: voicemailMessage }),
+  addContact: (name, phone, client) =>
+    apiRequest("POST", "/api/contacts", { name, phone, ...clientBody(client) }),
+  listContacts: (client) =>
+    apiRequest("GET", "/api/contacts" + (client ? `?client=${encodeURIComponent(client)}` : "")),
+  placeCall: (name, objective, voicemailMessage, client) =>
+    apiRequest("POST", "/api/calls", {
+      name,
+      objective,
+      voicemail_message: voicemailMessage,
+      ...clientBody(client),
+    }),
+  placeBatch: (names, objective, voicemailMessage, client) =>
+    apiRequest("POST", "/api/calls/batch", {
+      names,
+      objective,
+      voicemail_message: voicemailMessage,
+      ...clientBody(client),
+    }),
   getCallResult: (callId) =>
     apiRequest("GET", `/api/calls/${encodeURIComponent(callId)}`),
   getBatchResult: (batchId) =>
@@ -61,19 +76,19 @@ export const remote = {
 export function makeRemoteBackend() {
   return {
     mode: "remote",
-    async addContact(name, phone) {
-      const c = await remote.addContact(name, phone);
+    async addContact(name, phone, client) {
+      const c = await remote.addContact(name, phone, client);
       return { name: c.name, phone: c.phone };
     },
-    async getContactByName(name) {
-      const list = await remote.listContacts();
+    async getContactByName(name, client) {
+      const list = await remote.listContacts(client);
       const found = list.find(
         (c) => String(c.name).toLowerCase() === String(name).toLowerCase()
       );
       return found ? { name: found.name, phone: found.phone } : null;
     },
-    placeCall: (name, objective, vm) => remote.placeCall(name, objective, vm),
-    placeBatch: (names, objective, vm) => remote.placeBatch(names, objective, vm),
+    placeCall: (name, objective, vm, client) => remote.placeCall(name, objective, vm, client),
+    placeBatch: (names, objective, vm, client) => remote.placeBatch(names, objective, vm, client),
     getCallResult: (callId) => remote.getCallResult(callId),
     getBatchResult: (batchId) => remote.getBatchResult(batchId),
   };

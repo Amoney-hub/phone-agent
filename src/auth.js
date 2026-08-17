@@ -5,7 +5,7 @@
 import crypto from "node:crypto";
 import bcrypt from "bcryptjs";
 
-import { getClientAuthByUsername } from "./db.js";
+import { getClientAuthByUsername, getClientByApiKey, resolveClientId } from "./db.js";
 
 const COOKIE_NAME = "pa_session";
 // How long a login stays valid.
@@ -192,20 +192,50 @@ export function requireAuthPage(req, res, next) {
   return res.redirect("/login");
 }
 
-/**
- * Does the request carry a valid `Authorization: Bearer <TRIGGER_API_KEY>`?
- * Used to let trusted machine clients (the MCP server in remote mode) reach the
- * JSON API without a dashboard session. Returns false when no key is set.
- */
-export function hasValidBearer(req) {
-  const key = process.env.TRIGGER_API_KEY;
-  if (!key) return false;
+function bearerToken(req) {
   const header = (req.get && req.get("authorization")) || req.headers?.authorization || "";
   const m = String(header).match(/^Bearer\s+(.+)$/i);
-  const token = m ? m[1].trim() : "";
+  return m ? m[1].trim() : "";
+}
+
+/** Constant-time check of a token against the global admin TRIGGER_API_KEY. */
+function matchesGlobalKey(token) {
+  const key = process.env.TRIGGER_API_KEY;
+  if (!key || !token) return false;
   const a = Buffer.from(token);
   const b = Buffer.from(key);
   return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+/**
+ * Resolve a `Authorization: Bearer <token>` to a principal, or null:
+ * - the global TRIGGER_API_KEY  -> admin (all tenants; attributes to Default)
+ * - a client's own api_key      -> that client (role "client", tenant-scoped)
+ *
+ * This lets the MCP server (global key) reach the whole API, while a per-client
+ * key both authenticates and pins attribution to that client.
+ */
+export function resolveBearer(req) {
+  const token = bearerToken(req);
+  if (!token) return null;
+  if (matchesGlobalKey(token)) {
+    return { role: "admin", clientId: null, username: "api", via: "bearer" };
+  }
+  const client = getClientByApiKey(token);
+  if (client) {
+    return {
+      role: "client",
+      clientId: client.id,
+      username: client.username || client.name,
+      via: "bearer",
+    };
+  }
+  return null;
+}
+
+/** Whether the request carries any recognized bearer token. */
+export function hasValidBearer(req) {
+  return Boolean(resolveBearer(req));
 }
 
 /**
@@ -224,9 +254,8 @@ export function requireApiAuth(req, res, next) {
  * carries its role/clientId. Legacy tokens (no role) are treated as admin.
  */
 export function getPrincipal(req) {
-  if (hasValidBearer(req)) {
-    return { role: "admin", clientId: null, username: "api", via: "bearer" };
-  }
+  const bearer = resolveBearer(req);
+  if (bearer) return bearer;
   const s = getSession(req);
   if (!s) return null;
   return {
@@ -257,6 +286,12 @@ export function resolveScope(req) {
   if (!principal) return { principal: null, clientId: null };
   if (principal.role === "client") {
     return { principal, clientId: principal.clientId };
+  }
+  // admin: a `?client=` reference (name or id) takes precedence, then a numeric
+  // `?client_id=`. Anything else means "all clients".
+  const ref = req.query?.client;
+  if (ref != null && String(ref).trim() !== "") {
+    return { principal, clientId: resolveClientId(ref) };
   }
   const q = req.query?.client_id;
   const n = q != null && q !== "" && q !== "all" ? Number(q) : NaN;

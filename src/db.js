@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
@@ -31,6 +32,7 @@ db.exec(`
     username       TEXT UNIQUE COLLATE NOCASE,
     password_hash  TEXT,
     outcome_values TEXT NOT NULL DEFAULT '{}',
+    api_key        TEXT UNIQUE,
     created_at     TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
@@ -84,6 +86,7 @@ db.exec(`
   -- hours wait here until the call window reopens (see src/callhours.js).
   CREATE TABLE IF NOT EXISTS queued_calls (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    client_id  INTEGER,
     name       TEXT NOT NULL,
     phone      TEXT NOT NULL,
     objective  TEXT NOT NULL,
@@ -108,6 +111,20 @@ for (const [col, type] of [
   ["client_id", "INTEGER"],
 ]) {
   if (!callColumns.has(col)) db.exec(`ALTER TABLE calls ADD COLUMN ${col} ${type};`);
+}
+
+// Add columns introduced after the multi-tenancy tables existed.
+const clientColumns = new Set(
+  db.prepare(`PRAGMA table_info(clients)`).all().map((c) => c.name)
+);
+if (!clientColumns.has("api_key")) {
+  db.exec(`ALTER TABLE clients ADD COLUMN api_key TEXT;`);
+}
+const queuedColumns = new Set(
+  db.prepare(`PRAGMA table_info(queued_calls)`).all().map((c) => c.name)
+);
+if (!queuedColumns.has("client_id")) {
+  db.exec(`ALTER TABLE queued_calls ADD COLUMN client_id INTEGER;`);
 }
 
 // Contacts predating multi-tenancy have a global UNIQUE(name) and no client_id.
@@ -157,6 +174,20 @@ db.prepare(`UPDATE contacts SET client_id = ? WHERE client_id IS NULL`).run(DEFA
 db.prepare(`UPDATE calls SET client_id = ? WHERE client_id IS NULL`).run(DEFAULT_CLIENT_ID);
 db.prepare(`UPDATE batches SET client_id = ? WHERE client_id IS NULL`).run(DEFAULT_CLIENT_ID);
 db.prepare(`UPDATE appointments SET client_id = ? WHERE client_id IS NULL`).run(DEFAULT_CLIENT_ID);
+
+/** Generate a random per-client trigger API key. */
+export function generateApiKey() {
+  return "ck_" + crypto.randomBytes(24).toString("hex");
+}
+
+// Give every real (non-Default) client an API key if it lacks one, so per-client
+// attribution works immediately. The Default client stays keyless — the global
+// TRIGGER_API_KEY already attributes to it.
+for (const row of db
+  .prepare(`SELECT id FROM clients WHERE api_key IS NULL AND id != ?`)
+  .all(DEFAULT_CLIENT_ID)) {
+  db.prepare(`UPDATE clients SET api_key = ? WHERE id = ?`).run(generateApiKey(), row.id);
+}
 
 // --- Prepared-statement cache ----------------------------------------------
 
@@ -438,7 +469,10 @@ function parseValues(json) {
   }
 }
 
-/** Public (admin) view of a client row, with outcome_values parsed. */
+/**
+ * Admin view of a client row. Includes the per-client `api_key` — this is only
+ * ever returned to admins (client-facing routes select just id/name).
+ */
 function clientView(row) {
   if (!row) return null;
   return {
@@ -447,25 +481,69 @@ function clientView(row) {
     username: row.username,
     has_login: Boolean(row.password_hash),
     outcome_values: parseValues(row.outcome_values),
+    api_key: row.api_key || null,
     created_at: row.created_at,
   };
 }
 
-export function createClient({ name, username = null, passwordHash = null, outcomeValues = {} }) {
+export function createClient({
+  name,
+  username = null,
+  passwordHash = null,
+  outcomeValues = {},
+  apiKey = generateApiKey(),
+}) {
   const info = prep(`
-    INSERT INTO clients (name, username, password_hash, outcome_values)
-    VALUES (@name, @username, @passwordHash, @outcomeValues)
+    INSERT INTO clients (name, username, password_hash, outcome_values, api_key)
+    VALUES (@name, @username, @passwordHash, @outcomeValues, @apiKey)
   `).run({
     name,
     username,
     passwordHash,
     outcomeValues: JSON.stringify(outcomeValues || {}),
+    apiKey,
   });
   return clientView(getClientRow(Number(info.lastInsertRowid)));
 }
 
 function getClientRow(id) {
   return prep(`SELECT * FROM clients WHERE id = ?;`).get(id);
+}
+
+/** Raw client row by exact API key (includes secrets) — for auth only. */
+export function getClientByApiKey(apiKey) {
+  if (!apiKey) return undefined;
+  return prep(`SELECT * FROM clients WHERE api_key = ?;`).get(apiKey);
+}
+
+/** Admin view of a client by name (case-insensitive). */
+export function getClientByName(name) {
+  return clientView(prep(`SELECT * FROM clients WHERE name = ? COLLATE NOCASE;`).get(name));
+}
+
+/**
+ * Resolve a client reference (numeric id, numeric string, or name) to a client
+ * id, or null if it doesn't match a client. Used by the MCP `client` parameter.
+ */
+export function resolveClientId(ref) {
+  if (ref == null || ref === "") return null;
+  if (typeof ref === "number" && Number.isInteger(ref)) {
+    return getClientRow(ref) ? ref : null;
+  }
+  const s = String(ref).trim();
+  if (/^\d+$/.test(s)) {
+    const id = Number(s);
+    return getClientRow(id) ? id : null;
+  }
+  const byName = prep(`SELECT id FROM clients WHERE name = ? COLLATE NOCASE;`).get(s);
+  return byName ? byName.id : null;
+}
+
+/** Rotate a client's API key and return the fresh admin view. */
+export function regenerateClientApiKey(id) {
+  const key = generateApiKey();
+  prep(`UPDATE clients SET api_key = @key WHERE id = @id;`).run({ id, key });
+  return getClientById(id);
 }
 
 export function getClientById(id) {
@@ -507,12 +585,12 @@ export function getDefaultClientId() {
 
 // --- Queued (out-of-hours) trigger calls ------------------------------------
 
-export function enqueueCall({ name, phone, objective, tag = null }) {
+export function enqueueCall({ name, phone, objective, tag = null, clientId = DEFAULT_CLIENT_ID }) {
   return prep(`
-    INSERT INTO queued_calls (name, phone, objective, tag)
-    VALUES (@name, @phone, @objective, @tag)
+    INSERT INTO queued_calls (client_id, name, phone, objective, tag)
+    VALUES (@clientId, @name, @phone, @objective, @tag)
     RETURNING *;
-  `).get({ name, phone, objective, tag });
+  `).get({ clientId, name, phone, objective, tag });
 }
 
 export function listQueuedCalls() {

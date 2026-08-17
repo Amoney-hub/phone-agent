@@ -346,7 +346,11 @@ function renderClientConfig() {
     ' Lets this client sign in to their read-only workspace.</div>' +
     '<form class="row-gap mt" id="loginForm"><input type="text" id="clUser" placeholder="username" value="' + esc(c.username || "") + '" required />' +
     '<input type="password" id="clPass" placeholder="new password" required />' +
-    '<button class="primary" type="submit">Set login</button></form>';
+    '<button class="primary" type="submit">Set login</button></form>' +
+    '<hr style="border-color:var(--border);margin:16px 0" />' +
+    '<div class="muted">Trigger API key — external systems send this as a bearer token to <code>POST /api/trigger/call</code>; calls attribute to this client.</div>' +
+    '<div class="row-gap mt"><input type="text" id="apiKey" readonly value="' + esc(c.api_key || "(none)") + '" style="flex:1;min-width:280px;font-family:ui-monospace,monospace" />' +
+    '<button id="copyKey">Copy</button><button id="regenKey" class="danger">Regenerate</button></div>';
   $("#saveVals").onclick = async () => {
     const outcome_values = {};
     box.querySelectorAll("#valGrid input").forEach((el) => {
@@ -363,6 +367,18 @@ function renderClientConfig() {
     try {
       clientById[SELECTED_CLIENT] = await api("PUT", "/api/clients/" + SELECTED_CLIENT + "/login", { username, password });
       toast("Login set"); renderClientConfig();
+    } catch (e) { toast(e.message, true); }
+  };
+  $("#copyKey").onclick = () => {
+    const v = $("#apiKey").value;
+    if (navigator.clipboard) navigator.clipboard.writeText(v).then(() => toast("Key copied")).catch(() => {});
+    else { $("#apiKey").select(); document.execCommand("copy"); toast("Key copied"); }
+  };
+  $("#regenKey").onclick = async () => {
+    if (!confirm("Regenerate this client's API key? The old key stops working immediately.")) return;
+    try {
+      clientById[SELECTED_CLIENT] = await api("POST", "/api/clients/" + SELECTED_CLIENT + "/key");
+      toast("API key regenerated"); renderClientConfig();
     } catch (e) { toast(e.message, true); }
   };
 }

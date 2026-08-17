@@ -3,34 +3,37 @@
 // Includes a simple rate limiter and a business-hours guard that can queue or
 // reject out-of-hours calls (see src/callhours.js).
 
-import crypto from "node:crypto";
-
-import { addContact, recordPlacedCall, enqueueCall, listQueuedCalls, deleteQueuedCall } from "./db.js";
+import {
+  addContact,
+  recordPlacedCall,
+  enqueueCall,
+  listQueuedCalls,
+  deleteQueuedCall,
+  DEFAULT_CLIENT_ID,
+} from "./db.js";
 import { createCall } from "./vapi.js";
 import { evaluateCallHours, isWithinCallHours, nextWindowOpen } from "./callhours.js";
+import { resolveBearer } from "./auth.js";
 
 // --- Auth ------------------------------------------------------------------
 
 /**
- * Require a valid `Authorization: Bearer <TRIGGER_API_KEY>` header. When the
- * key is unset the endpoint is disabled (503). Comparison is constant-time.
+ * Require a valid bearer token: either the global TRIGGER_API_KEY (attributes
+ * to the Default client) or a client's own api_key (attributes to that client).
+ * The resolved principal is attached as `req.principal`.
  */
 export function requireTriggerAuth(req, res, next) {
-  const key = process.env.TRIGGER_API_KEY;
-  if (!key) {
+  // The endpoint is only "on" once a global key exists OR clients have keys.
+  if (!process.env.TRIGGER_API_KEY) {
     return res
       .status(503)
       .json({ error: "Trigger endpoint disabled. Set TRIGGER_API_KEY to enable it." });
   }
-  const header = req.get("authorization") || "";
-  const m = header.match(/^Bearer\s+(.+)$/i);
-  const token = m ? m[1].trim() : "";
-  const a = Buffer.from(token);
-  const b = Buffer.from(key);
-  const ok = a.length === b.length && crypto.timingSafeEqual(a, b);
-  if (!ok) {
+  const principal = resolveBearer(req);
+  if (!principal) {
     return res.status(401).json({ error: "Invalid or missing bearer token." });
   }
+  req.principal = principal;
   next();
 }
 
@@ -66,18 +69,19 @@ export function _resetRateLimit() {
  * Upsert the contact, place the call, and record it with its source tag.
  * Shared by the immediate path and the out-of-hours queue drain.
  */
-export async function placeTriggeredCall({ name, phone, objective, tag }) {
+export async function placeTriggeredCall({ name, phone, objective, tag, clientId = DEFAULT_CLIENT_ID }) {
   const sourceTag = tag || "trigger";
-  const contact = addContact(name, phone); // upsert by name
+  const contact = addContact(name, phone, clientId); // upsert by name within the tenant
   const call = await createCall(contact.phone, objective);
   recordPlacedCall({
     callId: call.id,
     customerNumber: contact.phone,
     status: call.status ?? "queued",
     sourceTag,
+    clientId,
   });
   console.error(
-    `[trigger] placed call ${call.id} -> ${contact.name} (${contact.phone}) [tag=${sourceTag}]`
+    `[trigger] placed call ${call.id} -> ${contact.name} (${contact.phone}) [tag=${sourceTag}] [client=${clientId}]`
   );
   return { call, contact };
 }
@@ -101,6 +105,7 @@ export async function processQueuedCalls() {
         phone: q.phone,
         objective: q.objective,
         tag: q.tag,
+        clientId: q.client_id ?? DEFAULT_CLIENT_ID,
       });
       deleteQueuedCall(q.id);
       placed++;
@@ -131,6 +136,10 @@ export async function handleTriggerCall(req, res) {
       .json({ error: "name, phone, and objective are required." });
   }
 
+  // Attribute to the client whose key was used; the global key falls back to
+  // the Default client.
+  const clientId = req.principal?.clientId ?? DEFAULT_CLIENT_ID;
+
   // Rate limit (only spend a slot once the request is otherwise valid).
   const rl = checkRateLimit();
   if (!rl.ok) {
@@ -154,7 +163,7 @@ export async function handleTriggerCall(req, res) {
       });
     }
     // Default: queue until the window reopens.
-    const q = enqueueCall({ name, phone, objective, tag });
+    const q = enqueueCall({ name, phone, objective, tag, clientId });
     const scheduledFor = nextWindowOpen();
     console.error(
       `[trigger] queued call to ${name} (${phone}) — outside ${hours.spec} ${hours.timezone} [tag=${tag || "trigger"}] queued_id=${q.id}`
@@ -171,11 +180,12 @@ export async function handleTriggerCall(req, res) {
 
   // Place immediately.
   try {
-    const { call, contact } = await placeTriggeredCall({ name, phone, objective, tag });
+    const { call, contact } = await placeTriggeredCall({ name, phone, objective, tag, clientId });
     return res.status(201).json({
       status: "placed",
       call_id: call.id,
       tag: tag || "trigger",
+      client_id: clientId,
       contact: { name: contact.name, phone: contact.phone },
     });
   } catch (err) {
