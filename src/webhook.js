@@ -238,7 +238,10 @@ app.get("/api/status", requireAdmin, (_req, res) => {
       process.env.TWILIO_NUMBER &&
       process.env.TWILIO_NUMBER !== TWILIO_NUMBER_PLACEHOLDER
   );
-  res.json({ vapi, twilio });
+  // Which objective classifier is active: "llm" (ANTHROPIC_API_KEY set) or the
+  // "heuristic" keyword fallback. Same key powers the pre-call requirement check.
+  const classifier = classifierConfigured() ? "llm" : "heuristic";
+  res.json({ vapi, twilio, classifier });
 });
 
 // --- Client management (admin only) ----------------------------------------
