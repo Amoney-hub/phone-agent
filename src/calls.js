@@ -13,6 +13,12 @@ import {
   DEFAULT_CLIENT_ID,
 } from "./db.js";
 import { createCall, getCall } from "./vapi.js";
+import {
+  guardObjectiveAndCapability,
+  guardRate,
+  reviewStatusFor,
+  runAbuseDetection,
+} from "./guard.js";
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -34,13 +40,22 @@ function resolveContact(name, clientId) {
  */
 export async function placeCall({ name, objective, voicemailMessage, clientId = DEFAULT_CLIENT_ID }) {
   const contact = resolveContact(name, clientId);
+  // Abuse guard: capability + objective classification, then per-call rate.
+  const { objectiveNorm } = await guardObjectiveAndCapability({ clientId, objective, kind: "single" });
+  guardRate({ clientId, phone: contact.phone });
+  const reviewStatus = reviewStatusFor(clientId);
+
   const call = await createCall(contact.phone, objective, { voicemailMessage });
   recordPlacedCall({
     callId: call.id,
     customerNumber: contact.phone,
     status: call.status ?? "queued",
     clientId,
+    objective,
+    objectiveNorm,
+    reviewStatus,
   });
+  runAbuseDetection(clientId);
   return {
     call_id: call.id,
     status: call.status ?? "queued",
@@ -61,6 +76,10 @@ export async function placeBatch({
   batchId,
   clientId = DEFAULT_CLIENT_ID,
 }) {
+  // Capability (batch allowed on this tier?) + objective classification once,
+  // up front — a rejection fails the whole batch with a clear error.
+  const { objectiveNorm } = await guardObjectiveAndCapability({ clientId, objective, kind: "batch" });
+
   const batch_id = batchId || `batch_${crypto.randomUUID()}`;
   recordBatch({ batchId: batch_id, clientId, objective });
   const results = [];
@@ -69,6 +88,9 @@ export async function placeBatch({
     const name = names[i];
     try {
       const contact = resolveContact(name, clientId);
+      // Per-call rate check so the batch stops once the day/week caps are hit.
+      guardRate({ clientId, phone: contact.phone });
+      const reviewStatus = reviewStatusFor(clientId);
       const call = await createCall(contact.phone, objective, { voicemailMessage });
       recordPlacedCall({
         callId: call.id,
@@ -76,6 +98,9 @@ export async function placeBatch({
         customerNumber: contact.phone,
         status: call.status ?? "queued",
         clientId,
+        objective,
+        objectiveNorm,
+        reviewStatus,
       });
       results.push({
         name: contact.name,
@@ -88,6 +113,7 @@ export async function placeBatch({
       results.push({ name, phone: null, call_id: null, status: null, error: err.message });
     }
   }
+  runAbuseDetection(clientId);
   return { batch_id, results };
 }
 

@@ -22,6 +22,7 @@ try {
 import {
   saveCallReport,
   addContact,
+  getStoredCall,
   listContacts,
   getContactById,
   updateContact,
@@ -37,7 +38,18 @@ import {
   resolveClientId,
   regenerateClientApiKey,
   deleteClient,
+  setClientTier,
+  listAbuseFlags,
+  resolveAbuseFlag,
+  countUnresolvedFlags,
+  listReviewQueue,
+  countReviewQueue,
+  setCallReviewStatus,
+  addAbuseFlag,
 } from "./db.js";
+import { tiersView, TIER_NAMES } from "./tiers.js";
+import { guardBulkImport, GuardError } from "./guard.js";
+import { classifierConfigured } from "./classify.js";
 import { renderDashboard, renderLogin, renderClient } from "./dashboard.js";
 import { resolveOutcome } from "./vapi.js";
 import {
@@ -199,8 +211,23 @@ app.get("/api/me", (req, res) => {
     username: p.username,
     clients: listClients(),
     default_client_id: getDefaultClientId(),
+    tiers: tiersView(),
+    review_count: countReviewQueue(),
+    flag_count: countUnresolvedFlags(),
   });
 });
+
+// Map a thrown error to an HTTP status. GuardError codes get specific codes;
+// a missing contact is 404; anything else from placement is 502.
+function statusForError(err) {
+  if (err instanceof GuardError) {
+    if (err.code === "classification") return 422;
+    if (err.code === "capability") return 403;
+    if (err.code === "rate") return 429;
+  }
+  if (/^No contact named/.test(err.message)) return 404;
+  return 502;
+}
 
 // Report whether the external integrations are configured (admin only).
 app.get("/api/status", requireAdmin, (_req, res) => {
@@ -274,6 +301,54 @@ app.post("/api/clients/:id/key", requireAdmin, (req, res) => {
   res.json(regenerateClientApiKey(id));
 });
 
+// Set a client's account tier (abuse limits).
+app.put("/api/clients/:id/tier", requireAdmin, (req, res) => {
+  const id = Number(req.params.id);
+  const tier = String(req.body?.tier || "").trim();
+  if (!Number.isInteger(id) || !getClientById(id)) {
+    return res.status(404).json({ error: "client not found." });
+  }
+  if (!TIER_NAMES.includes(tier)) {
+    return res.status(400).json({ error: `tier must be one of: ${TIER_NAMES.join(", ")}.` });
+  }
+  res.json(setClientTier(id, tier));
+});
+
+// --- Abuse review (admin only) ---------------------------------------------
+
+// New accounts' first calls awaiting review (with transcripts).
+app.get("/api/review", requireAdmin, (_req, res) => res.json(listReviewQueue()));
+
+// Approve or flag a reviewed call. Flagging also raises an abuse flag.
+app.post("/api/review/:callId", requireAdmin, (req, res) => {
+  const callId = String(req.params.callId);
+  const status = String(req.body?.status || "").trim(); // "approved" | "flagged"
+  if (status !== "approved" && status !== "flagged") {
+    return res.status(400).json({ error: 'status must be "approved" or "flagged".' });
+  }
+  const call = getStoredCall(callId);
+  if (!call) return res.status(404).json({ error: "call not found." });
+  setCallReviewStatus(callId, status);
+  if (status === "flagged") {
+    addAbuseFlag({ clientId: call.client_id, kind: "manual_review", detail: callId });
+  }
+  res.json({ call_id: callId, review_status: status });
+});
+
+// Abuse flags raised for accounts.
+app.get("/api/flags", requireAdmin, (req, res) => {
+  const resolved = req.query.resolved === "1" || req.query.resolved === "true";
+  res.json(listAbuseFlags({ resolved }));
+});
+
+app.post("/api/flags/:id/resolve", requireAdmin, (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || !resolveAbuseFlag(id)) {
+    return res.status(404).json({ error: "flag not found." });
+  }
+  res.json({ resolved: true });
+});
+
 // Delete a client and ALL of its data (contacts, calls, appointments, batches,
 // queued calls). The Default client cannot be deleted.
 app.delete("/api/clients/:id", requireAdmin, (req, res) => {
@@ -316,6 +391,31 @@ app.post("/api/contacts", requireAdmin, (req, res) => {
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
+});
+
+// Bulk contact import — gated by tier (not available on the cheap tier).
+app.post("/api/contacts/bulk", requireAdmin, (req, res) => {
+  const rows = req.body?.contacts;
+  if (!Array.isArray(rows) || rows.length === 0) {
+    return res.status(400).json({ error: "contacts[] is required." });
+  }
+  const target = resolveTargetClientId(req);
+  if (target.error) return res.status(400).json({ error: target.error });
+  try {
+    guardBulkImport({ clientId: target.id });
+  } catch (err) {
+    return res.status(statusForError(err)).json({ error: err.message });
+  }
+  let added = 0;
+  const errors = [];
+  for (const r of rows) {
+    const name = r && typeof r.name === "string" ? r.name.trim() : "";
+    const phone = r && typeof r.phone === "string" ? r.phone.trim() : "";
+    if (!name || !phone) { errors.push({ row: r, error: "name and phone required" }); continue; }
+    try { addContact(name, phone, target.id); added++; }
+    catch (err) { errors.push({ row: r, error: err.message }); }
+  }
+  res.status(201).json({ added, errors, client_id: target.id });
 });
 
 app.put("/api/contacts/:id", requireAdmin, (req, res) => {
@@ -371,9 +471,7 @@ app.post("/api/calls", requireAdmin, async (req, res) => {
     });
     res.status(201).json({ ...result, client_id: target.id });
   } catch (err) {
-    // A missing contact is a 404; anything else (Vapi failure) is a 502.
-    const notFound = /^No contact named/.test(err.message);
-    res.status(notFound ? 404 : 502).json({ error: err.message });
+    res.status(statusForError(err)).json({ error: err.message });
   }
 });
 
@@ -394,7 +492,7 @@ app.post("/api/calls/batch", requireAdmin, async (req, res) => {
     });
     res.json({ ...result, client_id: target.id });
   } catch (err) {
-    res.status(502).json({ error: err.message });
+    res.status(statusForError(err)).json({ error: err.message });
   }
 });
 
@@ -546,6 +644,13 @@ app.listen(PORT, () => {
         (hours.enabled
           ? ` (call hours ${hours.spec} ${hours.timezone}).`
           : " (no call-hours guard; set CALL_HOURS to restrict).")
+    );
+  }
+  if (classifierConfigured()) {
+    console.error("[guard] objective classifier: Anthropic LLM.");
+  } else {
+    console.error(
+      "[guard] objective classifier: heuristic fallback (set ANTHROPIC_API_KEY for LLM classification)."
     );
   }
 });

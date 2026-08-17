@@ -14,6 +14,13 @@ import {
 import { createCall } from "./vapi.js";
 import { evaluateCallHours, isWithinCallHours, nextWindowOpen } from "./callhours.js";
 import { resolveBearer } from "./auth.js";
+import { normalizeObjective } from "./classify.js";
+import {
+  guardObjectiveAndCapability,
+  guardRate,
+  reviewStatusFor,
+  runAbuseDetection,
+} from "./guard.js";
 
 // --- Auth ------------------------------------------------------------------
 
@@ -72,6 +79,9 @@ export function _resetRateLimit() {
 export async function placeTriggeredCall({ name, phone, objective, tag, clientId = DEFAULT_CLIENT_ID }) {
   const sourceTag = tag || "trigger";
   const contact = addContact(name, phone, clientId); // upsert by name within the tenant
+  // Per-tier rate cap (objective was classified upfront in handleTriggerCall).
+  guardRate({ clientId, phone: contact.phone });
+  const reviewStatus = reviewStatusFor(clientId);
   const call = await createCall(contact.phone, objective);
   recordPlacedCall({
     callId: call.id,
@@ -79,7 +89,11 @@ export async function placeTriggeredCall({ name, phone, objective, tag, clientId
     status: call.status ?? "queued",
     sourceTag,
     clientId,
+    objective,
+    objectiveNorm: normalizeObjective(objective),
+    reviewStatus,
   });
+  runAbuseDetection(clientId);
   console.error(
     `[trigger] placed call ${call.id} -> ${contact.name} (${contact.phone}) [tag=${sourceTag}] [client=${clientId}]`
   );
@@ -140,6 +154,16 @@ export async function handleTriggerCall(req, res) {
   // the Default client.
   const clientId = req.principal?.clientId ?? DEFAULT_CLIENT_ID;
 
+  // Abuse guard: classify the objective up front (reject sales/marketing/promo)
+  // so disallowed calls are never placed OR queued.
+  try {
+    await guardObjectiveAndCapability({ clientId, objective, kind: "single" });
+  } catch (err) {
+    if (err.code === "classification") return res.status(422).json({ error: err.message });
+    if (err.code === "capability") return res.status(403).json({ error: err.message });
+    return res.status(500).json({ error: err.message });
+  }
+
   // Rate limit (only spend a slot once the request is otherwise valid).
   const rl = checkRateLimit();
   if (!rl.ok) {
@@ -189,6 +213,7 @@ export async function handleTriggerCall(req, res) {
       contact: { name: contact.name, phone: contact.phone },
     });
   } catch (err) {
+    if (err.code === "rate") return res.status(429).json({ error: err.message });
     return res.status(502).json({ error: `Failed to place call: ${err.message}` });
   }
 }

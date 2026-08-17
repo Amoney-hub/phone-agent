@@ -119,6 +119,23 @@
   .nav-item:hover { background: var(--surface-input); color: var(--text-primary); }
   .nav-item.active { background: var(--accent-muted); color: var(--text-primary); }
   .nav-ico { width: 16px; height: 16px; flex: 0 0 16px; color: currentColor; }
+  .nav-badge { margin-left: auto; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px;
+    background: var(--accent); color: var(--on-accent); font-size: 11px; font-weight: 600;
+    display: inline-flex; align-items: center; justify-content: center; }
+  /* Review + flags */
+  .flag { display: flex; align-items: center; gap: var(--s-3); padding: var(--s-3) 0; }
+  .flag + .flag { border-top: 1px solid var(--border); }
+  .flag .flag-body { flex: 1; min-width: 0; }
+  .flag .flag-kind { font-weight: 500; }
+  .review-item { padding: var(--s-4) var(--s-5); border-bottom: 1px solid var(--border); }
+  .review-item:last-child { border-bottom: none; }
+  .review-head { display: flex; align-items: center; gap: var(--s-3); flex-wrap: wrap; }
+  .review-head .acct { font-weight: 600; }
+  .review-obj { margin: var(--s-2) 0; color: var(--text-secondary); }
+  .review-actions { display: flex; gap: var(--s-2); margin-top: var(--s-3); }
+  .btn-approve { color: var(--booked); border-color: transparent; background: transparent; }
+  .btn-approve:hover { background: var(--booked-tint); }
+  .tier-badge { text-transform: uppercase; letter-spacing: .04em; font-size: 11px; }
 
   .sidebar-foot { margin-top: auto; padding-top: var(--s-4); border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: var(--s-3); }
   .whoami { font-size: 12px; color: var(--text-muted); padding: 0 var(--s-3); }
@@ -321,6 +338,11 @@
         <svg class="nav-ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="5.5" cy="6" r="2"/><path d="M1.8 12.5c0-1.9 1.6-3 3.7-3"/><circle cx="10.8" cy="6.4" r="1.7"/><path d="M8.6 12.5c.2-1.7 1.5-2.7 3.2-2.7 1.3 0 2.4.6 2.8 2"/></svg>
         <span>Clients</span>
       </a>
+      <a class="nav-item" data-view="review">
+        <svg class="nav-ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 2.5h6l2.5 2.5v8.5H4z"/><path d="M6 7h4M6 9.5h4"/></svg>
+        <span>Review</span>
+        <span class="nav-badge" id="reviewBadge" hidden></span>
+      </a>
       <a class="nav-item" data-view="settings">
         <svg class="nav-ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M3 5h4M11 5h2"/><circle cx="9" cy="5" r="1.5"/><path d="M3 11h2M9 11h4"/><circle cx="7" cy="11" r="1.5"/></svg>
         <span>Settings</span>
@@ -413,6 +435,22 @@
         </div>
       </section>
 
+      <!-- ----------------------- Review ----------------------- -->
+      <section class="view" data-view="review">
+        <div class="stack">
+          <div class="card">
+            <div class="section-title">Abuse flags</div>
+            <div id="flagsList"></div>
+          </div>
+          <div class="card pad-0">
+            <div class="filter-row"><span class="label">Review queue</span>
+              <span class="count" id="reviewCount"></span></div>
+            <div id="reviewList"></div>
+            <div class="empty" id="reviewEmpty" hidden>Nothing awaiting review.</div>
+          </div>
+        </div>
+      </section>
+
       <!-- ---------------------- Settings ---------------------- -->
       <section class="view" data-view="settings">
         <div class="stack">
@@ -473,7 +511,7 @@ function fmtDuration(sec) {
 }
 
 // --- View router ----------------------------------------------------------
-const VIEW_TITLES = { overview: "Overview", contacts: "Contacts", calls: "Calls", clients: "Clients", settings: "Settings" };
+const VIEW_TITLES = { overview: "Overview", contacts: "Contacts", calls: "Calls", clients: "Clients", review: "Review", settings: "Settings" };
 function showView(name) {
   if (!VIEW_TITLES[name]) name = "overview";
   $$(".view").forEach((v) => v.classList.toggle("active", v.dataset.view === name));
@@ -538,6 +576,13 @@ async function loadMe() {
   // falling back to "all clients".
   if (SELECTED_CLIENT && !clientById[SELECTED_CLIENT]) setSelectedClient("");
   sw.value = SELECTED_CLIENT;
+  updateReviewBadge();
+}
+
+function updateReviewBadge() {
+  const n = ME ? (ME.review_count || 0) + (ME.flag_count || 0) : 0;
+  const b = $("#reviewBadge");
+  if (n > 0) { b.textContent = String(n); b.hidden = false; } else { b.hidden = true; }
 }
 
 $("#clientSwitcher").addEventListener("change", (e) => {
@@ -589,7 +634,22 @@ function renderClientConfig() {
     (vals[o] != null ? esc(vals[o]) : "") + '" placeholder="0" /></div>'
   ).join("");
   const isDefault = ME && Number(SELECTED_CLIENT) === ME.default_client_id;
+  const tiers = (ME && ME.tiers) || {};
+  const tierOpts = Object.keys(tiers).map((k) =>
+    '<option value="' + k + '"' + (c.tier === k ? ' selected' : '') + '>' + esc(tiers[k].label || k) + '</option>'
+  ).join("");
+  const t = tiers[c.tier] || {};
+  const tierDesc = t.label
+    ? (t.calls_per_day == null ? "Unlimited calls" : t.calls_per_day + " calls/day") + " · " +
+      (t.distinct_numbers_per_week == null ? "unlimited numbers" : t.distinct_numbers_per_week + " numbers/week") + " · " +
+      (t.allow_batch ? "batch ✓" : "no batch") + " · " + (t.allow_bulk_import ? "bulk import ✓" : "no bulk import") + " · " +
+      (t.classify_objectives ? "objective screening on" : "no screening")
+    : "";
   box.innerHTML =
+    '<div class="section-title">Account tier</div>' +
+    '<div class="row-gap"><select id="tierSelect">' + tierOpts + '</select>' +
+    '<span class="text-muted" id="tierDesc">' + esc(tierDesc) + '</span></div>' +
+    '<hr class="divider" />' +
     '<p class="text-secondary" style="margin-top:0">Per-outcome dollar value for <strong>' + esc(c.name) + '</strong> — drives the estimated value.</p>' +
     '<div class="valgrid" style="margin-top:var(--s-4)" id="valGrid">' + inputs + '</div>' +
     '<div class="row-gap" style="margin-top:var(--s-4)"><button class="btn btn-primary" id="saveVals">Save values</button></div>' +
@@ -612,6 +672,12 @@ function renderClientConfig() {
       '<div class="row-gap"><button class="btn btn-danger" id="delClient">Delete client</button>' +
       '<span class="text-muted">Permanently removes this client and all of its contacts, calls, and results.</span></div>');
 
+  $("#tierSelect").onchange = async (ev) => {
+    try {
+      clientById[SELECTED_CLIENT] = await api("PUT", "/api/clients/" + SELECTED_CLIENT + "/tier", { tier: ev.target.value });
+      toast("Tier updated"); renderClientConfig();
+    } catch (e) { toast(e.message, true); }
+  };
   $("#saveVals").onclick = async () => {
     const outcome_values = {};
     box.querySelectorAll("#valGrid input").forEach((el) => {
@@ -862,6 +928,76 @@ $("#logoutBtn").addEventListener("click", logout);
 $("#logoutBtn2").addEventListener("click", logout);
 
 // --- Boot -----------------------------------------------------------------
+// --- Review queue + abuse flags -------------------------------------------
+function flagLabel(kind) {
+  return kind === "repeat_objective" ? "Same objective to many numbers"
+    : kind === "manual_review" ? "Flagged in review" : kind;
+}
+
+async function loadReview() {
+  const [queue, flags] = await Promise.all([api("GET", "/api/review"), api("GET", "/api/flags")]);
+  renderFlags(flags);
+  renderReviewQueue(queue);
+}
+
+function renderFlags(flags) {
+  const box = $("#flagsList");
+  if (!flags.length) { box.innerHTML = '<span class="text-muted">No active flags.</span>'; return; }
+  box.innerHTML = flags.map((f) =>
+    '<div class="flag"><div class="flag-body">' +
+      '<span class="flag-kind">' + esc(flagLabel(f.kind)) + '</span> — ' +
+      '<span class="text-secondary">' + esc(f.client_name || ("client " + f.client_id)) + '</span> ' +
+      '<span class="badge tier-badge">' + esc(f.client_tier || "") + '</span>' +
+      (f.detail ? '<div class="text-muted" style="font-size:13px">' + esc(f.detail) + (f.count > 1 ? " · " + f.count + " numbers" : "") + '</div>' : '') +
+    '</div><button class="btn btn-secondary btn-sm" data-flag="' + f.id + '">Resolve</button></div>'
+  ).join("");
+  box.querySelectorAll("[data-flag]").forEach((btn) => {
+    btn.onclick = async () => {
+      try { await api("POST", "/api/flags/" + btn.dataset.flag + "/resolve"); toast("Flag resolved"); await loadMe(); loadReview(); }
+      catch (e) { toast(e.message, true); }
+    };
+  });
+}
+
+function renderReviewQueue(items) {
+  const list = $("#reviewList");
+  $("#reviewEmpty").hidden = items.length > 0;
+  $("#reviewCount").textContent = items.length ? items.length + " pending" : "";
+  list.innerHTML = "";
+  for (const it of items) list.appendChild(reviewRow(it));
+}
+
+function reviewRow(it) {
+  const div = document.createElement("div");
+  div.className = "review-item";
+  const who = it.contact_name || it.customer_number || "Unknown";
+  div.innerHTML =
+    '<div class="review-head">' +
+      '<span class="acct">' + esc(it.client_name || ("client " + it.client_id)) + '</span>' +
+      '<span class="badge tier-badge">' + esc(it.client_tier || "") + '</span>' +
+      outcomeBadge(it.outcome) +
+      '<span class="meta text-muted mono" style="margin-left:auto">' + esc((it.placed_at || "").replace("T", " ")) + '</span>' +
+    '</div>' +
+    '<div class="review-obj"><strong>' + esc(who) + '</strong> — ' + esc(it.objective || "(no objective recorded)") + '</div>' +
+    (it.transcript ? '<pre class="transcript">' + esc(it.transcript) + '</pre>'
+      : '<div class="text-muted">No transcript yet (call may still be in progress).</div>') +
+    (it.recording_url ? '<audio controls preload="none" src="' + esc(it.recording_url) + '"></audio>' : '') +
+    '<div class="review-actions">' +
+      '<button class="btn btn-approve btn-sm" data-act="approved">Approve</button>' +
+      '<button class="btn btn-danger btn-sm" data-act="flagged">Flag account</button>' +
+    '</div>';
+  div.querySelectorAll("[data-act]").forEach((btn) => {
+    btn.onclick = async () => {
+      try {
+        await api("POST", "/api/review/" + encodeURIComponent(it.call_id), { status: btn.dataset.act });
+        toast(btn.dataset.act === "approved" ? "Approved" : "Account flagged");
+        await loadMe(); loadReview();
+      } catch (e) { toast(e.message, true); }
+    };
+  });
+  return div;
+}
+
 async function boot() {
   showView(location.hash.slice(1) || "overview");
   showSkeletons();
@@ -871,6 +1007,7 @@ async function boot() {
     loadResults().catch((e) => toast(e.message, true)),
     loadContacts().catch((e) => toast(e.message, true)),
     loadCalls().catch((e) => toast(e.message, true)),
+    loadReview().catch((e) => toast(e.message, true)),
   ]);
   renderClientConfig();
 }

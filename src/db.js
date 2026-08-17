@@ -33,6 +33,7 @@ db.exec(`
     password_hash  TEXT,
     outcome_values TEXT NOT NULL DEFAULT '{}',
     api_key        TEXT UNIQUE,
+    tier           TEXT NOT NULL DEFAULT 'free',
     created_at     TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
@@ -60,6 +61,10 @@ db.exec(`
     callback_time    TEXT,
     notes            TEXT,
     source_tag       TEXT,
+    objective        TEXT,
+    objective_norm   TEXT,
+    review_status    TEXT,
+    placed_at        TEXT,
     updated_at       TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
@@ -80,6 +85,20 @@ db.exec(`
     phone          TEXT,
     scheduled_time TEXT,
     created_at     TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  -- Abuse signals raised for an account (e.g. the same objective blasted to
+  -- many numbers, or a manual review flag). One row per (client, kind, detail).
+  CREATE TABLE IF NOT EXISTS abuse_flags (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    client_id  INTEGER,
+    kind       TEXT NOT NULL,
+    detail     TEXT,
+    count      INTEGER NOT NULL DEFAULT 1,
+    resolved   INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(client_id, kind, detail)
   );
 
   -- Calls received via the inbound trigger endpoint while outside business
@@ -109,9 +128,15 @@ for (const [col, type] of [
   ["notes", "TEXT"],
   ["source_tag", "TEXT"],
   ["client_id", "INTEGER"],
+  ["objective", "TEXT"],
+  ["objective_norm", "TEXT"],
+  ["review_status", "TEXT"],
+  ["placed_at", "TEXT"],
 ]) {
   if (!callColumns.has(col)) db.exec(`ALTER TABLE calls ADD COLUMN ${col} ${type};`);
 }
+// Backfill placed_at from updated_at so rate windows have a value for old rows.
+db.exec(`UPDATE calls SET placed_at = updated_at WHERE placed_at IS NULL;`);
 
 // Add columns introduced after the multi-tenancy tables existed.
 const clientColumns = new Set(
@@ -119,6 +144,9 @@ const clientColumns = new Set(
 );
 if (!clientColumns.has("api_key")) {
   db.exec(`ALTER TABLE clients ADD COLUMN api_key TEXT;`);
+}
+if (!clientColumns.has("tier")) {
+  db.exec(`ALTER TABLE clients ADD COLUMN tier TEXT NOT NULL DEFAULT 'free';`);
 }
 const queuedColumns = new Set(
   db.prepare(`PRAGMA table_info(queued_calls)`).all().map((c) => c.name)
@@ -174,6 +202,9 @@ db.prepare(`UPDATE contacts SET client_id = ? WHERE client_id IS NULL`).run(DEFA
 db.prepare(`UPDATE calls SET client_id = ? WHERE client_id IS NULL`).run(DEFAULT_CLIENT_ID);
 db.prepare(`UPDATE batches SET client_id = ? WHERE client_id IS NULL`).run(DEFAULT_CLIENT_ID);
 db.prepare(`UPDATE appointments SET client_id = ? WHERE client_id IS NULL`).run(DEFAULT_CLIENT_ID);
+// The platform owner's Default tenant is unlimited so the owner's own usage
+// (MCP, global trigger key) is never rate-limited or classified.
+db.prepare(`UPDATE clients SET tier = 'unlimited' WHERE id = ?`).run(DEFAULT_CLIENT_ID);
 
 /** Generate a random per-client trigger API key. */
 export function generateApiKey() {
@@ -277,10 +308,10 @@ export function saveCallReport({
   const row = prep(`
     INSERT INTO calls
       (call_id, client_id, status, ended_reason, summary, transcript, recording_url,
-       customer_number, duration_seconds, outcome, callback_time, notes, updated_at)
+       customer_number, duration_seconds, outcome, callback_time, notes, placed_at, updated_at)
     VALUES
       (@call_id, @client_id, @status, @ended_reason, @summary, @transcript, @recording_url,
-       @customer_number, @duration_seconds, @outcome, @callback_time, @notes, datetime('now'))
+       @customer_number, @duration_seconds, @outcome, @callback_time, @notes, datetime('now'), datetime('now'))
     ON CONFLICT(call_id) DO UPDATE SET
       status           = excluded.status,
       ended_reason     = excluded.ended_reason,
@@ -340,16 +371,27 @@ export function recordPlacedCall({
   status = "queued",
   sourceTag = null,
   clientId = DEFAULT_CLIENT_ID,
+  objective = null,
+  objectiveNorm = null,
+  reviewStatus = null,
 }) {
   return prep(`
-    INSERT INTO calls (call_id, client_id, batch_id, customer_number, status, source_tag, updated_at)
-    VALUES (@call_id, @client_id, @batch_id, @customer_number, @status, @source_tag, datetime('now'))
+    INSERT INTO calls
+      (call_id, client_id, batch_id, customer_number, status, source_tag,
+       objective, objective_norm, review_status, placed_at, updated_at)
+    VALUES
+      (@call_id, @client_id, @batch_id, @customer_number, @status, @source_tag,
+       @objective, @objective_norm, @review_status, datetime('now'), datetime('now'))
     ON CONFLICT(call_id) DO UPDATE SET
       client_id       = COALESCE(calls.client_id, excluded.client_id),
       batch_id        = COALESCE(excluded.batch_id, calls.batch_id),
       customer_number = COALESCE(excluded.customer_number, calls.customer_number),
       status          = COALESCE(excluded.status, calls.status),
       source_tag      = COALESCE(excluded.source_tag, calls.source_tag),
+      objective       = COALESCE(calls.objective, excluded.objective),
+      objective_norm  = COALESCE(calls.objective_norm, excluded.objective_norm),
+      review_status   = COALESCE(calls.review_status, excluded.review_status),
+      placed_at       = COALESCE(calls.placed_at, excluded.placed_at),
       updated_at      = excluded.updated_at
     RETURNING *;
   `).get({
@@ -359,6 +401,9 @@ export function recordPlacedCall({
     customer_number: customerNumber,
     status,
     source_tag: sourceTag,
+    objective,
+    objective_norm: objectiveNorm,
+    review_status: reviewStatus,
   });
 }
 
@@ -482,6 +527,7 @@ function clientView(row) {
     has_login: Boolean(row.password_hash),
     outcome_values: parseValues(row.outcome_values),
     api_key: row.api_key || null,
+    tier: row.tier || "free",
     created_at: row.created_at,
   };
 }
@@ -492,18 +538,130 @@ export function createClient({
   passwordHash = null,
   outcomeValues = {},
   apiKey = generateApiKey(),
+  tier = "free",
 }) {
   const info = prep(`
-    INSERT INTO clients (name, username, password_hash, outcome_values, api_key)
-    VALUES (@name, @username, @passwordHash, @outcomeValues, @apiKey)
+    INSERT INTO clients (name, username, password_hash, outcome_values, api_key, tier)
+    VALUES (@name, @username, @passwordHash, @outcomeValues, @apiKey, @tier)
   `).run({
     name,
     username,
     passwordHash,
     outcomeValues: JSON.stringify(outcomeValues || {}),
     apiKey,
+    tier,
   });
   return clientView(getClientRow(Number(info.lastInsertRowid)));
+}
+
+// --- Tiers & usage counters (abuse limits) ---------------------------------
+
+export function getClientTier(id) {
+  const row = getClientRow(id);
+  return (row && row.tier) || "free";
+}
+
+export function setClientTier(id, tier) {
+  prep(`UPDATE clients SET tier = @tier WHERE id = @id;`).run({ id, tier });
+  return getClientById(id);
+}
+
+/** Calls a client placed within a rolling window (e.g. mod = '-1 day'). */
+export function callsPlacedSince(clientId, mod) {
+  return prep(
+    `SELECT COUNT(*) AS n FROM calls WHERE client_id = @clientId AND placed_at >= datetime('now', @mod);`
+  ).get({ clientId, mod }).n;
+}
+
+/** Distinct numbers a client has dialed within a rolling window. */
+export function distinctNumbersSince(clientId, mod) {
+  return prep(
+    `SELECT COUNT(DISTINCT customer_number) AS n FROM calls
+     WHERE client_id = @clientId AND customer_number IS NOT NULL AND placed_at >= datetime('now', @mod);`
+  ).get({ clientId, mod }).n;
+}
+
+/** Whether a client has already dialed a number within a rolling window. */
+export function numberCalledSince(clientId, phone, mod) {
+  return Boolean(
+    prep(
+      `SELECT 1 FROM calls WHERE client_id = @clientId AND customer_number = @phone
+       AND placed_at >= datetime('now', @mod) LIMIT 1;`
+    ).get({ clientId, phone, mod })
+  );
+}
+
+/**
+ * Groups of calls that share the same normalized objective sent to many
+ * distinct numbers within a window — the "spray the same script" signal.
+ */
+export function repeatObjectiveGroups(clientId, mod, threshold) {
+  return prep(
+    `SELECT objective_norm, COUNT(DISTINCT customer_number) AS numbers, COUNT(*) AS calls
+     FROM calls
+     WHERE client_id = @clientId AND objective_norm IS NOT NULL AND objective_norm != ''
+       AND placed_at >= datetime('now', @mod)
+     GROUP BY objective_norm
+     HAVING numbers >= @threshold
+     ORDER BY numbers DESC;`
+  ).all({ clientId, mod, threshold });
+}
+
+// --- Abuse flags ------------------------------------------------------------
+
+export function addAbuseFlag({ clientId, kind, detail = null, count = 1 }) {
+  prep(`
+    INSERT INTO abuse_flags (client_id, kind, detail, count)
+    VALUES (@clientId, @kind, @detail, @count)
+    ON CONFLICT(client_id, kind, detail) DO UPDATE SET
+      count = excluded.count, resolved = 0, updated_at = datetime('now');
+  `).run({ clientId, kind, detail, count });
+}
+
+export function listAbuseFlags({ resolved = false } = {}) {
+  return prep(`
+    SELECT abuse_flags.*, clients.name AS client_name, clients.tier AS client_tier
+    FROM abuse_flags LEFT JOIN clients ON clients.id = abuse_flags.client_id
+    WHERE abuse_flags.resolved = @resolved
+    ORDER BY abuse_flags.updated_at DESC;
+  `).all({ resolved: resolved ? 1 : 0 });
+}
+
+export function resolveAbuseFlag(id) {
+  return prep(`UPDATE abuse_flags SET resolved = 1, updated_at = datetime('now') WHERE id = ?;`)
+    .run(id).changes > 0;
+}
+
+export function countUnresolvedFlags() {
+  return prep(`SELECT COUNT(*) AS n FROM abuse_flags WHERE resolved = 0;`).get().n;
+}
+
+// --- Review queue (new accounts' first calls) ------------------------------
+
+/** Calls awaiting admin review, newest first, with account + objective. */
+export function listReviewQueue() {
+  return prep(`
+    SELECT calls.call_id, calls.client_id, calls.customer_number, calls.objective,
+           calls.status, calls.ended_reason, calls.outcome, calls.summary,
+           calls.transcript, calls.recording_url, calls.duration_seconds,
+           calls.placed_at, calls.updated_at,
+           clients.name AS client_name, clients.tier AS client_tier,
+           contacts.name AS contact_name
+    FROM calls
+    LEFT JOIN clients ON clients.id = calls.client_id
+    LEFT JOIN contacts ON contacts.phone = calls.customer_number AND contacts.client_id = calls.client_id
+    WHERE calls.review_status = 'pending'
+    ORDER BY calls.placed_at DESC;
+  `).all();
+}
+
+export function countReviewQueue() {
+  return prep(`SELECT COUNT(*) AS n FROM calls WHERE review_status = 'pending';`).get().n;
+}
+
+export function setCallReviewStatus(callId, status) {
+  return prep(`UPDATE calls SET review_status = @status WHERE call_id = @callId;`)
+    .run({ callId, status }).changes > 0;
 }
 
 function getClientRow(id) {

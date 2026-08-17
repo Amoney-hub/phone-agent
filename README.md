@@ -334,6 +334,42 @@ drains the queue every minute, and the queue survives restarts. Send
 `{"outside_hours":"reject"}` to get a `409` instead. When `CALL_HOURS` is unset,
 calls go out at any hour. Every triggered call is logged with its source tag.
 
+## Abuse prevention (account tiers)
+
+Each account (client/tenant) has a **tier** that gates what it can do. The
+platform owner's **Default** tenant is `unlimited` (never restricted); new
+self-serve accounts default to `free`.
+
+| Tier | Calls/day | Distinct #s/week | Batch calling | Bulk import | First calls reviewed |
+| --- | --- | --- | --- | --- | --- |
+| `free` | 20 | 15 | ✗ | ✗ | first 10 |
+| `pro` | 500 | 1000 | ✓ | ✓ | — |
+| `unlimited` | ∞ | ∞ | ✓ | ✓ | — |
+
+Limits are configurable via env (see `.env.example`). Admins set a tier from
+**Client settings** or `PUT /api/clients/:id/tier`.
+
+Enforced on every call placement (single, batch, and inbound trigger):
+
+1. **Objective screening** — the plain-language objective is classified by an
+   LLM (Anthropic Claude Haiku when `ANTHROPIC_API_KEY` is set; a keyword
+   heuristic otherwise) and **sales / marketing / promotional** intent is
+   rejected with a clear error (`422`). Skipped for the `unlimited` tier.
+2. **Rate limits** — calls/day and distinct-numbers/week per tier (`429` when
+   hit; re-calling a number you already reached this week doesn't count again).
+3. **Capabilities** — batch calling and bulk contact import are blocked on the
+   `free` tier (`403`).
+
+**Abuse flagging.** When one objective (normalized) is sent to many distinct
+numbers within a week, the account is flagged (`ABUSE_OBJECTIVE_THRESHOLD`,
+default 5). Flags appear in the dashboard's **Review** tab.
+
+**Review queue.** A new account's first calls are marked for review; the
+**Review** tab shows them with objective + transcript + recording so an admin
+can **Approve** or **Flag** the account. A badge on the nav shows the pending
+count. Routes: `GET /api/review`, `POST /api/review/:callId {status}`,
+`GET /api/flags`, `POST /api/flags/:id/resolve`.
+
 ## Web dashboard
 
 Running `npm run webhook` also serves a dark-theme web dashboard at
@@ -391,6 +427,9 @@ src/
   twilio.js   Twilio SMS client
   vapi.js     Vapi call client + system-prompt builder
   auth.js     Session auth (admin + client roles, bcrypt), scoping + bearer guard
+  tiers.js    Account tiers + per-tier limits/capabilities
+  classify.js LLM objective classifier (Claude Haiku) + heuristic fallback
+  guard.js    Abuse guard: classification, rate limits, review flagging, detection
   trigger.js  Inbound trigger endpoint: bearer auth, rate limit, out-of-hours queue
   callhours.js   Business-hours window parsing + timezone evaluation
   webhook.js  Express server (port 3117): Vapi webhook + dashboard + /api routes
