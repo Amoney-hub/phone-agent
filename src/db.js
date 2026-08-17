@@ -21,10 +21,6 @@ const dbPath = process.env.PHONE_AGENT_DB
   ? path.resolve(process.env.PHONE_AGENT_DB)
   : path.join(__dirname, "..", "contacts.db");
 
-// The absolute SQLite file actually opened by this process. Exported so a
-// diagnostic route can confirm PHONE_AGENT_DB / a mounted volume is being used.
-export const DB_PATH = dbPath;
-
 const db = new Database(dbPath);
 db.pragma("journal_mode = WAL");
 
@@ -548,6 +544,27 @@ export function regenerateClientApiKey(id) {
   const key = generateApiKey();
   prep(`UPDATE clients SET api_key = @key WHERE id = @id;`).run({ id, key });
   return getClientById(id);
+}
+
+/**
+ * Delete a client and ALL of its data (contacts, calls, appointments, batches,
+ * queued calls) in one transaction. The Default client cannot be deleted.
+ * Returns true if a client row was removed.
+ */
+const deleteClientTx = db.transaction((id) => {
+  db.prepare(`DELETE FROM appointments WHERE client_id = ?`).run(id);
+  db.prepare(`DELETE FROM calls WHERE client_id = ?`).run(id);
+  db.prepare(`DELETE FROM batches WHERE client_id = ?`).run(id);
+  db.prepare(`DELETE FROM contacts WHERE client_id = ?`).run(id);
+  db.prepare(`DELETE FROM queued_calls WHERE client_id = ?`).run(id);
+  return db.prepare(`DELETE FROM clients WHERE id = ?`).run(id).changes > 0;
+});
+
+export function deleteClient(id) {
+  if (Number(id) === DEFAULT_CLIENT_ID) {
+    throw new Error("The Default client cannot be deleted.");
+  }
+  return deleteClientTx(id);
 }
 
 export function getClientById(id) {

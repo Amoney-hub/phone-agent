@@ -350,7 +350,11 @@ function renderClientConfig() {
     '<hr style="border-color:var(--border);margin:16px 0" />' +
     '<div class="muted">Trigger API key — external systems send this as a bearer token to <code>POST /api/trigger/call</code>; calls attribute to this client.</div>' +
     '<div class="row-gap mt"><input type="text" id="apiKey" readonly value="' + esc(c.api_key || "(none)") + '" style="flex:1;min-width:280px;font-family:ui-monospace,monospace" />' +
-    '<button id="copyKey">Copy</button><button id="regenKey" class="danger">Regenerate</button></div>';
+    '<button id="copyKey">Copy</button><button id="regenKey" class="danger">Regenerate</button></div>' +
+    (ME && Number(SELECTED_CLIENT) === ME.default_client_id ? '' :
+      '<hr style="border-color:var(--border);margin:16px 0" />' +
+      '<div class="row-gap"><button id="delClient" class="danger">Delete client</button>' +
+      '<span class="muted">Permanently removes this client and all of its contacts, calls, and results.</span></div>');
   $("#saveVals").onclick = async () => {
     const outcome_values = {};
     box.querySelectorAll("#valGrid input").forEach((el) => {
@@ -379,6 +383,19 @@ function renderClientConfig() {
     try {
       clientById[SELECTED_CLIENT] = await api("POST", "/api/clients/" + SELECTED_CLIENT + "/key");
       toast("API key regenerated"); renderClientConfig();
+    } catch (e) { toast(e.message, true); }
+  };
+  const delBtn = $("#delClient");
+  if (delBtn) delBtn.onclick = async () => {
+    if (!confirm('Delete client "' + c.name + '" and ALL of its contacts, calls, and results? This cannot be undone.')) return;
+    try {
+      await api("DELETE", "/api/clients/" + SELECTED_CLIENT);
+      toast("Client deleted");
+      delete clientById[SELECTED_CLIENT];
+      SELECTED_CLIENT = "";
+      await loadMe();
+      $("#clientSwitcher").value = "";
+      refreshAll();
     } catch (e) { toast(e.message, true); }
   };
 }
