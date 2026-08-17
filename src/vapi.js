@@ -10,6 +10,23 @@ function requireEnv(name) {
 }
 
 /**
+ * Whether the assistant proactively discloses that it's an AI. Controlled by
+ * DISCLOSE_AI (default true). Only false when explicitly set to a falsy string.
+ * Even when false, the assistant still answers honestly if directly asked.
+ */
+export function shouldDiscloseAI() {
+  const v = String(process.env.DISCLOSE_AI ?? "true").trim().toLowerCase();
+  return !(v === "false" || v === "0" || v === "no" || v === "off");
+}
+
+/** The assistant's opening line (Vapi `firstMessage`). */
+export function buildFirstMessage() {
+  return shouldDiscloseAI()
+    ? "Hi, this is an AI assistant calling on behalf of my user. Do you have a moment?"
+    : "Hi, I'm calling on behalf of my user. Do you have a moment?";
+}
+
+/**
  * Build a system prompt for the transient assistant from a plain-language
  * objective supplied by the caller. The objective is treated strictly as a
  * private instruction/brief for the assistant — it is delimited and the model
@@ -17,6 +34,20 @@ function requireEnv(name) {
  * like "identify yourself as..." or "ask him to confirm...").
  */
 export function buildSystemPrompt(objective) {
+  const disclose = shouldDiscloseAI();
+
+  const firstTurn = disclose
+    ? "- Your very first turn must disclose that you are an AI assistant calling on behalf of your user, then briefly and naturally state the reason for the call in your own words. Do not make small talk before disclosing that you are an AI."
+    : "- Your very first turn should briefly and naturally state the reason for the call, on behalf of your user, in your own words. Do NOT proactively announce or volunteer that you are an AI, automated, or a bot — just get to the point politely.";
+
+  // Absolute honesty rule — applies in both modes; essential when not disclosing.
+  const honesty =
+    "- If the person asks in any way whether you are a bot, an AI, automated, a recording, or a real/human person, ALWAYS answer truthfully and immediately that you are an AI assistant calling on behalf of your user. Never claim to be human or deny being an AI.";
+
+  const voicemail = disclose
+    ? "- Leave a short, natural message (2-3 sentences) IN YOUR OWN WORDS: say you are an AI assistant calling on behalf of your user, briefly convey the reason for the call as a paraphrase of the objective's intent (never read the objective text), and ask them to call back. Then end the call."
+    : "- Leave a short, natural message (2-3 sentences) IN YOUR OWN WORDS, on behalf of your user: briefly convey the reason for the call as a paraphrase of the objective's intent (never read the objective text) and ask them to call back, without volunteering that you are an AI. Then end the call.";
+
   return [
     "You are an AI voice assistant making an outbound phone call on behalf of your user (the person who owns this phone agent).",
     "",
@@ -31,13 +62,14 @@ export function buildSystemPrompt(objective) {
     "==== END OBJECTIVE ====",
     "",
     "How to speak:",
-    "- Your very first turn must disclose that you are an AI assistant calling on behalf of your user, then briefly and naturally state the reason for the call in your own words. Do not make small talk before disclosing that you are an AI.",
+    firstTurn,
+    honesty,
     "- Speak naturally and conversationally, keep your turns short, and be polite.",
     "- Stay focused on the objective and gather or convey the needed information.",
     "- Once the objective is met, thank the person and end the call.",
     "",
     "If you reach voicemail:",
-    "- Leave a short, natural message (2-3 sentences) IN YOUR OWN WORDS: say you are an AI assistant calling on behalf of your user, briefly convey the reason for the call as a paraphrase of the objective's intent (never read the objective text), and ask them to call back. Then end the call.",
+    voicemail,
   ].join("\n");
 }
 
@@ -49,8 +81,11 @@ export function buildSystemPrompt(objective) {
  * via createCall's `voicemailMessage` option.
  */
 export function buildVoicemailMessage() {
+  const intro = shouldDiscloseAI()
+    ? "Hi, this is an AI assistant calling on behalf of my user."
+    : "Hi, I'm calling on behalf of my user.";
   return [
-    "Hi, this is an AI assistant calling on behalf of my user.",
+    intro,
     "Sorry I missed you — please give us a call back when you get a chance.",
     "Thank you!",
   ].join(" ");
@@ -151,8 +186,7 @@ export async function createCall(to, objective, options = {}) {
     phoneNumberId,
     customer: { number: to },
     assistant: {
-      firstMessage:
-        "Hi, this is an AI assistant calling on behalf of my user. Do you have a moment?",
+      firstMessage: buildFirstMessage(),
       model: {
         provider: "openai",
         model: "gpt-4o",

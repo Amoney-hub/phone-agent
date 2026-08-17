@@ -427,6 +427,11 @@ require a valid session (see [Dashboard authentication](#dashboard-authenticatio
   file. The objective is treated as a **private instruction** to the assistant —
   delimited and never read aloud or quoted (it may itself contain directions like
   "identify yourself as..."). Tweak this to change tone or guardrails.
+- **AI disclosure** is controlled by `DISCLOSE_AI` (default `true`). When `true`,
+  the assistant opens by stating it's an AI calling on the user's behalf. When
+  `false`, it doesn't volunteer that it's an AI — but it **always answers honestly
+  if directly asked** whether it's a bot/AI/real person. (Bot-disclosure laws vary
+  by jurisdiction; compliance is your responsibility.)
 - Voicemail: by default the assistant **composes its own** short, natural
   voicemail (paraphrasing the objective's intent — never speaking it verbatim).
   Detection is configured by `buildVoicemailDetection`. To pin exact words for a
