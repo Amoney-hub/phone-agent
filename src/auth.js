@@ -5,7 +5,13 @@
 import crypto from "node:crypto";
 import bcrypt from "bcryptjs";
 
-import { getClientAuthByUsername, getClientByApiKey, resolveClientId } from "./db.js";
+import {
+  getClientAuthByUsername,
+  getClientByApiKey,
+  resolveClientId,
+  resolveApiKey,
+  getClientById,
+} from "./db.js";
 
 const COOKIE_NAME = "pa_session";
 // How long a login stays valid.
@@ -192,7 +198,7 @@ export function requireAuthPage(req, res, next) {
   return res.redirect("/login");
 }
 
-function bearerToken(req) {
+export function bearerToken(req) {
   const header = (req.get && req.get("authorization")) || req.headers?.authorization || "";
   const m = String(header).match(/^Bearer\s+(.+)$/i);
   return m ? m[1].trim() : "";
@@ -229,6 +235,20 @@ export function resolveBearer(req) {
       username: client.username || client.name,
       via: "bearer",
     };
+  }
+  // Multi-key developer keys (api_keys table), resolved by hash.
+  const resolved = resolveApiKey(token);
+  if (resolved) {
+    const c = getClientById(resolved.client_id);
+    if (c) {
+      return {
+        role: "client",
+        clientId: c.id,
+        username: c.username || c.name,
+        apiKeyId: resolved.api_key_id,
+        via: "bearer",
+      };
+    }
   }
   return null;
 }

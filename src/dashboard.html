@@ -314,6 +314,38 @@
 
   .row-gap { display: flex; gap: var(--s-3); align-items: center; flex-wrap: wrap; }
   .valgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: var(--s-3); }
+
+  /* ========================== Developer tab =========================== */
+  .dev-tabs { display: flex; gap: var(--s-2); flex-wrap: wrap; border-bottom: 1px solid var(--border); }
+  .dev-tab {
+    background: none; border: 0; border-bottom: 2px solid transparent; cursor: pointer;
+    color: var(--text-secondary); padding: var(--s-2) var(--s-3); font: inherit; font-size: 14px;
+    margin-bottom: -1px;
+  }
+  .dev-tab:hover { color: var(--text-primary); }
+  .dev-tab.active { color: var(--text-primary); border-bottom-color: var(--accent); }
+  .key-secret { display: block; background: var(--surface-input); border: 1px solid var(--border);
+    border-radius: var(--radius-sm); padding: var(--s-3); margin-top: var(--s-3); word-break: break-all; }
+  .badge-ok { color: var(--accent); }
+  .badge-off { color: var(--text-muted); }
+  .badge-revoked { color: var(--danger); }
+  .status-2xx { color: var(--accent); }
+  .status-4xx { color: #d19a30; }
+  .status-5xx { color: var(--danger); }
+  .chart { display: flex; align-items: flex-end; gap: 6px; height: 140px; padding-top: var(--s-3); }
+  .chart-col { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 0; }
+  .chart-bar { width: 100%; max-width: 34px; background: var(--accent); border-radius: 3px 3px 0 0; min-height: 2px; opacity: .85; }
+  .chart-bar:hover { opacity: 1; }
+  .chart-x { font-size: 10px; color: var(--text-muted); white-space: nowrap; }
+  .docs-ep { border: 1px solid var(--border); border-radius: var(--radius-sm); margin-top: var(--s-3); overflow: hidden; }
+  .docs-ep summary { cursor: pointer; padding: var(--s-3); display: flex; gap: var(--s-3); align-items: center; }
+  .docs-ep .m { font-size: 11px; font-weight: 700; padding: 2px 7px; border-radius: 4px; text-transform: uppercase; }
+  .m-get { background: rgba(91,140,255,.16); color: var(--accent); }
+  .m-post { background: rgba(75,192,130,.16); color: #4bc082; }
+  .m-put { background: rgba(209,154,48,.18); color: #d19a30; }
+  .m-delete { background: rgba(224,80,80,.16); color: var(--danger); }
+  .docs-ep .path { font-family: var(--mono, monospace); font-size: 13px; }
+  .docs-ep .body { padding: 0 var(--s-3) var(--s-3); font-size: 13px; color: var(--text-secondary); }
 </style>
 </head>
 <body>
@@ -342,6 +374,10 @@
         <svg class="nav-ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 2.5h6l2.5 2.5v8.5H4z"/><path d="M6 7h4M6 9.5h4"/></svg>
         <span>Review</span>
         <span class="nav-badge" id="reviewBadge" hidden></span>
+      </a>
+      <a class="nav-item" data-view="developer">
+        <svg class="nav-ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4.5 2.5 8 6 11.5"/><path d="M10 4.5 13.5 8 10 11.5"/></svg>
+        <span>Developer</span>
       </a>
       <a class="nav-item" data-view="settings">
         <svg class="nav-ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M3 5h4M11 5h2"/><circle cx="9" cy="5" r="1.5"/><path d="M3 11h2M9 11h4"/><circle cx="7" cy="11" r="1.5"/></svg>
@@ -466,6 +502,105 @@
           </div>
         </div>
       </section>
+
+      <!-- ---------------------- Developer --------------------- -->
+      <section class="view" data-view="developer">
+        <div class="stack">
+          <div class="dev-tabs" id="devTabs">
+            <button class="dev-tab active" data-dev="keys">API keys</button>
+            <button class="dev-tab" data-dev="usage">Usage</button>
+            <button class="dev-tab" data-dev="requests">Request log</button>
+            <button class="dev-tab" data-dev="webhooks">Webhooks</button>
+            <button class="dev-tab" data-dev="docs">API docs</button>
+          </div>
+
+          <!-- Keys -->
+          <div class="dev-panel" data-dev="keys">
+            <div class="card">
+              <div class="section-title">Create API key</div>
+              <p class="text-secondary" style="margin-top:0">Keys authenticate the REST API at <code>/v1</code>. The full secret is shown once, on creation — store it somewhere safe.</p>
+              <form class="form-row mt-6" id="keyForm">
+                <div class="field"><label class="label" for="keyClient">Client</label><select id="keyClient"></select></div>
+                <div class="field"><label class="label" for="keyName">Label (optional)</label><input type="text" id="keyName" placeholder="Production server" autocomplete="off" /></div>
+                <button class="btn btn-primary" type="submit">Create key</button>
+              </form>
+              <div id="newKeyReveal" hidden></div>
+            </div>
+            <div class="card pad-0">
+              <table>
+                <thead><tr><th>Key</th><th>Client</th><th>Label</th><th>Last used</th><th>Status</th><th></th></tr></thead>
+                <tbody id="keysBody"></tbody>
+              </table>
+              <div class="empty" id="keysEmpty" hidden>No API keys yet.</div>
+            </div>
+          </div>
+
+          <!-- Usage -->
+          <div class="dev-panel" data-dev="usage" hidden>
+            <div class="stats">
+              <div class="card stat"><span class="label">Calls (30d)</span><div class="stat-value mono" id="uCalls">—</div></div>
+              <div class="card stat"><span class="label">Minutes (30d)</span><div class="stat-value mono" id="uMinutes">—</div></div>
+              <div class="card stat"><span class="label">Messages (30d)</span><div class="stat-value mono" id="uMessages">—</div></div>
+            </div>
+            <div class="card">
+              <div class="section-title">Calls per day <span class="text-muted" id="uScope"></span></div>
+              <div id="usageChart"></div>
+            </div>
+          </div>
+
+          <!-- Request log -->
+          <div class="dev-panel" data-dev="requests" hidden>
+            <div class="card pad-0">
+              <div class="filter-row"><span class="label">Recent API requests</span><span class="count" id="reqCount"></span>
+                <button class="btn btn-secondary btn-sm" id="reqRefresh" style="margin-left:auto">Refresh</button></div>
+              <table>
+                <thead><tr><th>Time</th><th>Method</th><th>Path</th><th>Status</th><th>Latency</th><th>Client</th></tr></thead>
+                <tbody id="reqBody"></tbody>
+              </table>
+              <div class="empty" id="reqEmpty" hidden>No API requests logged yet.</div>
+            </div>
+          </div>
+
+          <!-- Webhooks -->
+          <div class="dev-panel" data-dev="webhooks" hidden>
+            <div class="card">
+              <div class="section-title">Outbound webhook</div>
+              <p class="text-secondary" style="margin-top:0">We POST a signed <code>call.completed</code> event to this URL when a call ends. Verify the <code>X-PhoneAgent-Signature</code> header (<code>sha256=HMAC(secret, "&lt;timestamp&gt;.&lt;body&gt;")</code>).</p>
+              <form class="form-row mt-6" id="webhookForm">
+                <div class="field"><label class="label" for="whClient">Client</label><select id="whClient"></select></div>
+                <div class="field" style="flex:2"><label class="label" for="whUrl">Webhook URL</label><input type="text" id="whUrl" class="mono" placeholder="https://your-app.com/webhooks/phone-agent" autocomplete="off" /></div>
+                <div class="field"><label class="label" for="whEnabled">Enabled</label><select id="whEnabled"><option value="1">On</option><option value="0">Off</option></select></div>
+                <button class="btn btn-primary" type="submit">Save</button>
+              </form>
+              <div class="row-gap mt-6">
+                <input type="text" id="whSecret" class="mono" readonly placeholder="(no secret yet)" style="flex:1;min-width:280px" />
+                <button class="btn btn-secondary" id="whCopy" type="button">Copy secret</button>
+                <button class="btn btn-danger" id="whRotate" type="button">Rotate secret</button>
+              </div>
+            </div>
+            <div class="card pad-0">
+              <div class="filter-row"><span class="label">Recent deliveries</span></div>
+              <table>
+                <thead><tr><th>Time</th><th>Event</th><th>Result</th><th>Attempts</th></tr></thead>
+                <tbody id="whDeliveries"></tbody>
+              </table>
+              <div class="empty" id="whDeliveriesEmpty" hidden>No deliveries yet.</div>
+            </div>
+          </div>
+
+          <!-- Docs -->
+          <div class="dev-panel" data-dev="docs" hidden>
+            <div class="card">
+              <div class="row-gap" style="align-items:center">
+                <div class="section-title" style="margin:0">API reference</div>
+                <a class="btn btn-secondary btn-sm" href="/v1/openapi.json" target="_blank" rel="noopener" style="margin-left:auto">OpenAPI spec</a>
+              </div>
+              <p class="text-secondary">Generated from the OpenAPI spec. Base URL <code id="docsBase">/v1</code>. Authenticate with <code>Authorization: Bearer &lt;key&gt;</code>.</p>
+              <div id="docsBody"></div>
+            </div>
+          </div>
+        </div>
+      </section>
     </div>
   </main>
 </div>
@@ -511,13 +646,14 @@ function fmtDuration(sec) {
 }
 
 // --- View router ----------------------------------------------------------
-const VIEW_TITLES = { overview: "Overview", contacts: "Contacts", calls: "Calls", clients: "Clients", review: "Review", settings: "Settings" };
+const VIEW_TITLES = { overview: "Overview", contacts: "Contacts", calls: "Calls", clients: "Clients", review: "Review", developer: "Developer", settings: "Settings" };
 function showView(name) {
   if (!VIEW_TITLES[name]) name = "overview";
   $$(".view").forEach((v) => v.classList.toggle("active", v.dataset.view === name));
   $$(".nav-item").forEach((a) => a.classList.toggle("active", a.dataset.view === name));
   $("#viewTitle").textContent = VIEW_TITLES[name];
   if (location.hash.slice(1) !== name) history.replaceState(null, "", "#" + name);
+  if (name === "developer") loadDeveloper();
 }
 $$(".nav-item").forEach((a) => a.addEventListener("click", (e) => { e.preventDefault(); showView(a.dataset.view); }));
 window.addEventListener("hashchange", () => showView(location.hash.slice(1) || "overview"));
@@ -588,6 +724,8 @@ function updateReviewBadge() {
 $("#clientSwitcher").addEventListener("change", (e) => {
   setSelectedClient(e.target.value);
   refreshAll();
+  // Keys/usage/request-log honor the top switcher's client filter.
+  if (DEV_INITED && (DEV_TAB === "keys" || DEV_TAB === "usage" || DEV_TAB === "requests")) showDevTab(DEV_TAB);
 });
 
 // --- Overview (results) ---------------------------------------------------
@@ -833,12 +971,239 @@ async function handleSetLogin() {
 
 document.addEventListener("submit", (ev) => {
   const id = ev.target && ev.target.id;
-  if (id !== "addForm" && id !== "newClientForm" && id !== "loginForm") return;
+  const known = ["addForm", "newClientForm", "loginForm", "keyForm", "webhookForm"];
+  if (!known.includes(id)) return;
   ev.preventDefault();
   if (id === "addForm") handleAddContact();
   else if (id === "newClientForm") handleCreateClient();
-  else handleSetLogin();
+  else if (id === "loginForm") handleSetLogin();
+  else if (id === "keyForm") handleCreateKey();
+  else if (id === "webhookForm") handleSaveWebhook();
 });
+
+// --- Developer console ----------------------------------------------------
+let DEV_INITED = false;
+let DEV_TAB = "keys";
+
+function initDeveloper() {
+  if (DEV_INITED) return;
+  DEV_INITED = true;
+  $$("#devTabs .dev-tab").forEach((b) =>
+    b.addEventListener("click", () => showDevTab(b.dataset.dev)));
+  $("#reqRefresh").addEventListener("click", () => loadRequests());
+  $("#whClient").addEventListener("change", () => loadWebhookConfig());
+  $("#whCopy").addEventListener("click", () => copyText($("#whSecret").value, "Secret copied"));
+  $("#whRotate").addEventListener("click", () => saveWebhook({ rotate: true }));
+}
+
+function copyText(v, msg) {
+  if (!v) return;
+  if (navigator.clipboard) navigator.clipboard.writeText(v).then(() => toast(msg)).catch(() => {});
+  else toast(v);
+}
+
+// Fill the per-client selectors (keys + webhooks) from the loaded client list.
+function fillDevClientSelects() {
+  if (!ME) return; // client list not loaded yet (e.g. deep-link to #developer)
+  const opts = (ME.clients || []).map((c) =>
+    '<option value="' + c.id + '"' + (c.id === ME.default_client_id ? " selected" : "") + '>' + esc(c.name) + '</option>'
+  ).join("");
+  const kc = $("#keyClient"), wc = $("#whClient");
+  if (kc && !kc.dataset.filled) { kc.innerHTML = opts; kc.dataset.filled = "1"; }
+  if (wc && !wc.dataset.filled) { wc.innerHTML = opts; wc.dataset.filled = "1"; }
+}
+
+function showDevTab(name) {
+  DEV_TAB = name;
+  $$("#devTabs .dev-tab").forEach((b) => b.classList.toggle("active", b.dataset.dev === name));
+  $$('.dev-panel').forEach((p) => { p.hidden = p.dataset.dev !== name; });
+  if (name === "keys") loadKeys();
+  else if (name === "usage") loadUsage();
+  else if (name === "requests") loadRequests();
+  else if (name === "webhooks") loadWebhookConfig();
+  else if (name === "docs") loadDocs();
+}
+
+function loadDeveloper() {
+  initDeveloper();
+  fillDevClientSelects();
+  showDevTab(DEV_TAB);
+}
+
+// --- Keys ---
+async function loadKeys() {
+  let rows = [];
+  try { rows = await api("GET", q("/api/developer/keys")); } catch (e) { toast(e.message, true); return; }
+  const body = $("#keysBody");
+  $("#keysEmpty").hidden = rows.length > 0;
+  body.innerHTML = rows.map((k) => {
+    const status = k.revoked
+      ? '<span class="badge-revoked">revoked</span>'
+      : '<span class="badge-ok">active</span>';
+    const actions = k.revoked ? "" :
+      '<button class="btn btn-secondary btn-sm" data-rotate="' + k.id + '">Rotate</button> ' +
+      '<button class="btn btn-danger btn-sm" data-revoke="' + k.id + '">Revoke</button>';
+    return '<tr>' +
+      '<td class="mono">' + esc(k.masked) + '</td>' +
+      '<td>' + esc(k.client_name || ("client " + k.client_id)) + '</td>' +
+      '<td>' + esc(k.name || "—") + '</td>' +
+      '<td class="text-secondary mono">' + esc((k.last_used_at || "never").replace("T", " ")) + '</td>' +
+      '<td>' + status + '</td>' +
+      '<td class="actions">' + actions + '</td>' +
+    '</tr>';
+  }).join("");
+  body.querySelectorAll("[data-rotate]").forEach((b) => b.onclick = () => rotateKey(b.dataset.rotate));
+  body.querySelectorAll("[data-revoke]").forEach((b) => b.onclick = () => revokeKey(b.dataset.revoke));
+}
+
+function revealKey(k) {
+  $("#newKeyReveal").hidden = false;
+  $("#newKeyReveal").innerHTML =
+    '<div class="section-title" style="margin-top:var(--s-4)">New key — copy it now</div>' +
+    '<p class="text-secondary" style="margin:0">This secret is shown only once.</p>' +
+    '<code class="key-secret mono" id="revealValue">' + esc(k.key) + '</code>' +
+    '<div class="row-gap mt-6"><button class="btn btn-secondary btn-sm" id="copyReveal">Copy key</button></div>';
+  $("#copyReveal").onclick = () => copyText(k.key, "Key copied");
+}
+
+async function handleCreateKey() {
+  const client_id = Number($("#keyClient").value);
+  const name = $("#keyName").value.trim();
+  try {
+    const k = await api("POST", "/api/developer/keys", { client_id, name: name || null });
+    $("#keyName").value = "";
+    revealKey(k);
+    toast("API key created");
+    loadKeys();
+  } catch (e) { toast(e.message, true); }
+}
+
+async function rotateKey(id) {
+  if (!confirm("Rotate this key? The current secret stops working immediately.")) return;
+  try { const k = await api("POST", "/api/developer/keys/" + id + "/rotate"); revealKey(k); toast("Key rotated"); loadKeys(); }
+  catch (e) { toast(e.message, true); }
+}
+
+async function revokeKey(id) {
+  if (!confirm("Revoke this key? It stops working immediately and cannot be restored.")) return;
+  try { await api("POST", "/api/developer/keys/" + id + "/revoke"); toast("Key revoked"); loadKeys(); }
+  catch (e) { toast(e.message, true); }
+}
+
+// --- Usage ---
+async function loadUsage() {
+  let u;
+  try { u = await api("GET", q("/api/developer/usage?days=14")); } catch (e) { toast(e.message, true); return; }
+  $("#uCalls").textContent = u.month.calls;
+  $("#uMinutes").textContent = u.month.minutes;
+  $("#uMessages").textContent = u.month.messages;
+  const name = SELECTED_CLIENT && clientById[SELECTED_CLIENT] ? clientById[SELECTED_CLIENT].name : "all clients";
+  $("#uScope").textContent = "· " + name;
+  renderUsageChart(u.daily || []);
+}
+
+function renderUsageChart(daily) {
+  const box = $("#usageChart");
+  if (!daily.length) { box.innerHTML = '<span class="text-muted">No calls in this window.</span>'; return; }
+  const max = Math.max(1, ...daily.map((d) => d.calls));
+  box.innerHTML = '<div class="chart">' + daily.map((d) => {
+    const h = Math.round((d.calls / max) * 120);
+    const label = (d.day || "").slice(5); // MM-DD
+    return '<div class="chart-col" title="' + esc(d.day) + ': ' + d.calls + ' calls">' +
+      '<div class="chart-bar" style="height:' + h + 'px"></div>' +
+      '<span class="chart-x">' + esc(label) + '</span></div>';
+  }).join("") + '</div>';
+}
+
+// --- Request log ---
+function statusClass(s) { return s >= 500 ? "status-5xx" : s >= 400 ? "status-4xx" : "status-2xx"; }
+async function loadRequests() {
+  let rows = [];
+  try { rows = await api("GET", q("/api/developer/logs?limit=150")); } catch (e) { toast(e.message, true); return; }
+  $("#reqEmpty").hidden = rows.length > 0;
+  $("#reqCount").textContent = rows.length ? rows.length + " shown" : "";
+  $("#reqBody").innerHTML = rows.map((r) =>
+    '<tr>' +
+      '<td class="text-secondary mono">' + esc((r.created_at || "").replace("T", " ")) + '</td>' +
+      '<td class="mono">' + esc(r.method) + '</td>' +
+      '<td class="mono">' + esc(r.path) + '</td>' +
+      '<td class="mono ' + statusClass(r.status) + '">' + esc(r.status) + '</td>' +
+      '<td class="mono">' + esc(r.latency_ms) + ' ms</td>' +
+      '<td>' + esc(r.client_name || (r.client_id != null ? "client " + r.client_id : "—")) + '</td>' +
+    '</tr>'
+  ).join("");
+}
+
+// --- Webhooks ---
+async function loadWebhookConfig() {
+  const cid = $("#whClient").value;
+  let cfg;
+  try { cfg = await api("GET", "/api/developer/webhook?client_id=" + encodeURIComponent(cid)); }
+  catch (e) { toast(e.message, true); return; }
+  $("#whUrl").value = cfg.url || "";
+  $("#whEnabled").value = cfg.enabled ? "1" : "0";
+  $("#whSecret").value = cfg.secret || "";
+  const dels = cfg.deliveries || [];
+  $("#whDeliveriesEmpty").hidden = dels.length > 0;
+  $("#whDeliveries").innerHTML = dels.map((d) =>
+    '<tr>' +
+      '<td class="text-secondary mono">' + esc((d.created_at || "").replace("T", " ")) + '</td>' +
+      '<td class="mono">' + esc(d.event || "") + '</td>' +
+      '<td class="' + (d.ok ? "badge-ok" : "badge-revoked") + '">' + (d.ok ? "delivered" : "failed" + (d.status_code ? " (" + d.status_code + ")" : "") + (d.error ? " · " + esc(d.error) : "")) + '</td>' +
+      '<td class="mono">' + esc(d.attempts) + '</td>' +
+    '</tr>'
+  ).join("");
+}
+
+async function handleSaveWebhook() { saveWebhook({}); }
+async function saveWebhook({ rotate }) {
+  const client_id = Number($("#whClient").value);
+  const url = $("#whUrl").value.trim();
+  const enabled = $("#whEnabled").value === "1";
+  try {
+    await api("PUT", "/api/developer/webhook", { client_id, url: url || null, enabled, rotate_secret: !!rotate });
+    toast(rotate ? "Secret rotated" : "Webhook saved");
+    loadWebhookConfig();
+  } catch (e) { toast(e.message, true); }
+}
+
+// --- Docs (rendered from the OpenAPI spec) ---
+let DOCS_LOADED = false;
+async function loadDocs() {
+  $("#docsBase").textContent = location.origin + "/v1";
+  if (DOCS_LOADED) return;
+  let spec;
+  try { const r = await fetch("/v1/openapi.json"); spec = await r.json(); }
+  catch (e) { $("#docsBody").innerHTML = '<span class="text-muted">Could not load spec.</span>'; return; }
+  DOCS_LOADED = true;
+  const rows = [];
+  for (const [path, methods] of Object.entries(spec.paths || {})) {
+    for (const [method, op] of Object.entries(methods)) {
+      rows.push({ method, path, op });
+    }
+  }
+  $("#docsBody").innerHTML = rows.map((r) => {
+    const params = (r.op.parameters || []).map((p) =>
+      '<code>' + esc(p.name) + '</code> <span class="text-muted">(' + esc(p.in) + (p.required ? ", required" : "") + ')</span>').join(", ");
+    const reqSchema = r.op.requestBody ? schemaName(r.op.requestBody) : "";
+    return '<details class="docs-ep">' +
+      '<summary><span class="m m-' + esc(r.method) + '">' + esc(r.method) + '</span>' +
+        '<span class="path">' + esc(r.path) + '</span>' +
+        '<span class="text-muted" style="margin-left:auto">' + esc(r.op.summary || "") + '</span></summary>' +
+      '<div class="body">' +
+        (r.op.tags ? '<div><strong>Tag:</strong> ' + esc(r.op.tags.join(", ")) + '</div>' : '') +
+        (params ? '<div style="margin-top:6px"><strong>Query/path:</strong> ' + params + '</div>' : '') +
+        (reqSchema ? '<div style="margin-top:6px"><strong>Request body:</strong> <code>' + esc(reqSchema) + '</code></div>' : '') +
+      '</div>' +
+    '</details>';
+  }).join("");
+}
+function schemaName(requestBody) {
+  try {
+    const ref = requestBody.content["application/json"].schema.$ref || "";
+    return ref.split("/").pop();
+  } catch { return ""; }
+}
 
 // --- Calls ----------------------------------------------------------------
 let allCalls = [];
@@ -1015,6 +1380,9 @@ async function boot() {
     loadReview().catch((e) => toast(e.message, true)),
   ]);
   renderClientConfig();
+  // If the page deep-linked straight to the Developer tab, ME wasn't ready when
+  // showView first ran — populate its client selectors now.
+  if ($(".view[data-view=developer]").classList.contains("active")) loadDeveloper();
 }
 boot();
 setInterval(() => loadCalls().catch(() => {}), 15000);

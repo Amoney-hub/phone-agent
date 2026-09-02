@@ -46,11 +46,27 @@ import {
   countReviewQueue,
   setCallReviewStatus,
   addAbuseFlag,
+  listApiKeys,
+  createApiKey,
+  rotateApiKey,
+  revokeApiKey,
+  getApiKeyById,
+  usageSummary,
+  usageDaily,
+  listRequestLogs,
+  getWebhook,
+  setWebhook,
+  listWebhookDeliveries,
+  addEmailSignup,
+  listEmailSignups,
+  countEmailSignups,
 } from "./db.js";
+import { createV1Router } from "./apiv1.js";
+import { dispatchCallCompleted } from "./outboundwebhooks.js";
 import { tiersView, TIER_NAMES } from "./tiers.js";
 import { guardBulkImport, GuardError } from "./guard.js";
 import { classifierConfigured } from "./classify.js";
-import { renderDashboard, renderLogin, renderClient } from "./dashboard.js";
+import { renderDashboard, renderLogin, renderClient, renderDevelopers } from "./dashboard.js";
 import { resolveOutcome, getRecordingUrl } from "./vapi.js";
 import {
   isAuthConfigured,
@@ -86,6 +102,30 @@ app.use(express.json({ limit: "10mb" }));
 
 // Simple liveness probe. Left open for uptime checks.
 app.get("/health", (_req, res) => res.json({ ok: true }));
+
+// --- Public developers landing (open; NO keys/docs/console) ----------------
+
+// A "coming soon" page with email capture. Deliberately exposes nothing about
+// the API console — that lives behind the admin dashboard's Developer tab.
+app.get("/developers", (_req, res) => {
+  res.type("html").send(renderDevelopers());
+});
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+app.post("/developers/signup", (req, res) => {
+  const email = String(req.body?.email || "").trim();
+  if (!EMAIL_RE.test(email) || email.length > 254) {
+    return res.status(400).json({ error: "A valid email is required." });
+  }
+  const added = addEmailSignup(email, "developers");
+  res.status(added ? 201 : 200).json({ ok: true, already: !added });
+});
+
+// --- Developer REST API (/v1) ----------------------------------------------
+
+// Self-authenticating with per-key bearer tokens (see src/apiv1.js). Mounted
+// before the dashboard session guard so it never depends on a cookie.
+app.use("/v1", createV1Router());
 
 // --- Authentication --------------------------------------------------------
 
@@ -245,6 +285,102 @@ app.get("/api/status", requireAdmin, (_req, res) => {
   // "heuristic" keyword fallback. Same key powers the pre-call requirement check.
   const classifier = classifierConfigured() ? "llm" : "heuristic";
   res.json({ vapi, twilio, classifier });
+});
+
+// --- Developer console (admin only) ----------------------------------------
+//
+// These back the dashboard's Developer tab. Every route is requireAdmin, and
+// the tab itself is only served inside the admin dashboard (clients get the
+// read-only client page), so no client or role can reach the console — by the
+// UI or by hitting these URLs directly (they return 403).
+
+// Optional ?client_id= filter → a number, else null ("all clients").
+function optClientId(req) {
+  const q = req.query?.client_id;
+  const n = q != null && q !== "" && q !== "all" ? Number(q) : NaN;
+  return Number.isInteger(n) ? n : null;
+}
+
+// API keys across clients (never includes raw secrets).
+app.get("/api/developer/keys", requireAdmin, (req, res) => {
+  res.json(listApiKeys(optClientId(req)));
+});
+
+// Create a key for a client (defaults to the Default client). The raw secret is
+// returned exactly once, here.
+app.post("/api/developer/keys", requireAdmin, (req, res) => {
+  const { client_id, name } = req.body ?? {};
+  const cid = Number.isInteger(Number(client_id)) ? Number(client_id) : getDefaultClientId();
+  if (!getClientById(cid)) return res.status(404).json({ error: "client not found." });
+  res.status(201).json(createApiKey(cid, name));
+});
+
+// Rotate a key: revoke it and mint a replacement (raw secret returned once).
+app.post("/api/developer/keys/:id/rotate", requireAdmin, (req, res) => {
+  const id = Number(req.params.id);
+  if (!getApiKeyById(id)) return res.status(404).json({ error: "key not found." });
+  res.json(rotateApiKey(id));
+});
+
+// Revoke a key.
+app.post("/api/developer/keys/:id/revoke", requireAdmin, (req, res) => {
+  const id = Number(req.params.id);
+  if (!getApiKeyById(id)) return res.status(404).json({ error: "key not found." });
+  revokeApiKey(id);
+  res.json({ id, revoked: true });
+});
+
+// Usage summary (several windows) + a daily series for the charts.
+app.get("/api/developer/usage", requireAdmin, (req, res) => {
+  const cid = optClientId(req);
+  const days = Math.min(Math.max(Number(req.query.days) || 14, 1), 90);
+  res.json({
+    client_id: cid,
+    day: usageSummary(cid, "-1 day"),
+    week: usageSummary(cid, "-7 days"),
+    month: usageSummary(cid, "-30 days"),
+    all: usageSummary(cid, null),
+    daily: usageDaily(cid, days),
+  });
+});
+
+// Request log with status codes + latency.
+app.get("/api/developer/logs", requireAdmin, (req, res) => {
+  const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 500);
+  res.json(listRequestLogs(optClientId(req), { limit }));
+});
+
+// Outbound webhook config for a client (+ recent delivery attempts).
+app.get("/api/developer/webhook", requireAdmin, (req, res) => {
+  const cid = optClientId(req) ?? getDefaultClientId();
+  const cfg = getWebhook(cid);
+  res.json({
+    client_id: cid,
+    url: cfg?.url ?? null,
+    enabled: cfg ? Boolean(cfg.enabled) : false,
+    secret: cfg?.secret ?? null,
+    deliveries: listWebhookDeliveries(cid, 20),
+  });
+});
+
+app.put("/api/developer/webhook", requireAdmin, (req, res) => {
+  const { client_id, url, enabled, rotate_secret } = req.body ?? {};
+  const cid = Number.isInteger(Number(client_id)) ? Number(client_id) : getDefaultClientId();
+  if (!getClientById(cid)) return res.status(404).json({ error: "client not found." });
+  if (url != null && url !== "" && !/^https?:\/\//i.test(String(url))) {
+    return res.status(400).json({ error: "url must be an http(s) URL." });
+  }
+  const cfg = setWebhook(cid, {
+    url: url ? String(url) : null,
+    enabled: enabled == null ? true : Boolean(enabled),
+    rotateSecret: Boolean(rotate_secret),
+  });
+  res.json({ client_id: cid, url: cfg?.url ?? null, enabled: Boolean(cfg?.enabled), secret: cfg?.secret ?? null });
+});
+
+// Waitlist emails captured by the public /developers page.
+app.get("/api/developer/signups", requireAdmin, (_req, res) => {
+  res.json({ count: countEmailSignups(), signups: listEmailSignups() });
 });
 
 // --- Client management (admin only) ----------------------------------------
@@ -636,10 +772,12 @@ app.post("/vapi/webhook", (req, res) => {
       console.error("[webhook] end-of-call-report missing call id; skipping.");
     } else {
       try {
-        saveCallReport(report);
+        const saved = saveCallReport(report);
         console.error(
           `[webhook] saved end-of-call-report for call ${report.callId} (${report.endedReason ?? report.status}).`
         );
+        // Notify the tenant's configured webhook (fire-and-forget, HMAC-signed).
+        dispatchCallCompleted(saved);
       } catch (err) {
         console.error("[webhook] failed to save report:", err);
       }

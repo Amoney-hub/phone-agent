@@ -112,6 +112,92 @@ db.exec(`
     tag        TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
+
+  -- Developer API keys. A client may hold several. The raw secret is shown
+  -- once at creation; only its SHA-256 hash is stored. key_prefix/last4
+  -- give the dashboard something to display without the secret.
+  CREATE TABLE IF NOT EXISTS api_keys (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    client_id    INTEGER NOT NULL,
+    name         TEXT,
+    key_hash     TEXT NOT NULL UNIQUE,
+    key_prefix   TEXT,
+    last4        TEXT,
+    created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    last_used_at TEXT,
+    revoked_at   TEXT
+  );
+
+  -- SMS messages sent through the developer API (POST /v1/messages).
+  CREATE TABLE IF NOT EXISTS messages (
+    id           TEXT PRIMARY KEY,
+    client_id    INTEGER,
+    api_key_id   INTEGER,
+    to_number    TEXT,
+    body         TEXT,
+    status       TEXT,
+    provider_sid TEXT,
+    error        TEXT,
+    created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  -- Per-action usage events for /v1/usage (calls + messages). Minutes are
+  -- derived from the calls table's duration_seconds, not stored here.
+  CREATE TABLE IF NOT EXISTS usage_events (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    client_id  INTEGER,
+    api_key_id INTEGER,
+    kind       TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  -- One outbound-webhook configuration per client (URL + signing secret).
+  CREATE TABLE IF NOT EXISTS webhooks (
+    client_id  INTEGER PRIMARY KEY,
+    url        TEXT,
+    secret     TEXT,
+    enabled    INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  -- Delivery attempts for outbound webhooks (observability / debugging).
+  CREATE TABLE IF NOT EXISTS webhook_deliveries (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    client_id   INTEGER,
+    event       TEXT,
+    url         TEXT,
+    status_code INTEGER,
+    ok          INTEGER,
+    error       TEXT,
+    attempts    INTEGER,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  -- Request log for the developer API (Developer tab shows status + latency).
+  CREATE TABLE IF NOT EXISTS request_logs (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    client_id  INTEGER,
+    api_key_id INTEGER,
+    method     TEXT,
+    path       TEXT,
+    status     INTEGER,
+    latency_ms INTEGER,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  -- Email captures from the public /developers "coming soon" page.
+  CREATE TABLE IF NOT EXISTS email_signups (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    email      TEXT UNIQUE COLLATE NOCASE,
+    source     TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_api_keys_client ON api_keys(client_id);
+  CREATE INDEX IF NOT EXISTS idx_messages_client ON messages(client_id, created_at);
+  CREATE INDEX IF NOT EXISTS idx_usage_client ON usage_events(client_id, created_at);
+  CREATE INDEX IF NOT EXISTS idx_reqlog_client ON request_logs(client_id, created_at);
 `);
 
 // --- Migrations for databases created before multi-tenancy ------------------
@@ -782,6 +868,288 @@ export function deleteQueuedCall(id) {
 
 export function countQueuedCalls() {
   return prep(`SELECT COUNT(*) AS n FROM queued_calls;`).get().n;
+}
+
+// --- Developer API keys -----------------------------------------------------
+
+const sha256hex = (s) => crypto.createHash("sha256").update(String(s)).digest("hex");
+
+/** Generate a fresh raw developer key. Same `ck_` scheme as the legacy key. */
+export function generateRawApiKey() {
+  return "ck_" + crypto.randomBytes(24).toString("hex");
+}
+
+/** Public shape of an api_keys row — never includes the hash or raw secret. */
+function apiKeyView(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    client_id: row.client_id,
+    client_name: row.client_name ?? null,
+    name: row.name || null,
+    // e.g. "ck_1a2b3c4d…7f9e" — enough to recognize a key, useless as a secret.
+    masked: `${row.key_prefix || "ck_"}…${row.last4 || ""}`,
+    prefix: row.key_prefix || null,
+    last4: row.last4 || null,
+    created_at: row.created_at,
+    last_used_at: row.last_used_at || null,
+    revoked: Boolean(row.revoked_at),
+    revoked_at: row.revoked_at || null,
+  };
+}
+
+/**
+ * Create a developer key for a client. Returns the public view PLUS the raw
+ * `key` — the only time the caller ever sees the full secret.
+ */
+export function createApiKey(clientId, name = null) {
+  const raw = generateRawApiKey();
+  const info = prep(`
+    INSERT INTO api_keys (client_id, name, key_hash, key_prefix, last4)
+    VALUES (@clientId, @name, @hash, @prefix, @last4)
+  `).run({
+    clientId,
+    name: name ? String(name).trim() : null,
+    hash: sha256hex(raw),
+    prefix: raw.slice(0, 11),
+    last4: raw.slice(-4),
+  });
+  const view = apiKeyView(prep(`SELECT * FROM api_keys WHERE id = ?;`).get(Number(info.lastInsertRowid)));
+  return { ...view, key: raw };
+}
+
+/** List a client's keys (or all keys, with client name, when clientId is null). */
+export function listApiKeys(clientId = null) {
+  if (clientId == null) {
+    return prep(`
+      SELECT api_keys.*, clients.name AS client_name
+      FROM api_keys LEFT JOIN clients ON clients.id = api_keys.client_id
+      ORDER BY api_keys.created_at DESC;
+    `).all().map(apiKeyView);
+  }
+  return prep(`SELECT * FROM api_keys WHERE client_id = ? ORDER BY created_at DESC;`)
+    .all(clientId).map(apiKeyView);
+}
+
+export function getApiKeyById(id) {
+  return apiKeyView(prep(`SELECT * FROM api_keys WHERE id = ?;`).get(id));
+}
+
+/** Revoke a key (idempotent). Returns true if a live key was revoked. */
+export function revokeApiKey(id) {
+  return prep(`UPDATE api_keys SET revoked_at = datetime('now') WHERE id = ? AND revoked_at IS NULL;`)
+    .run(id).changes > 0;
+}
+
+/**
+ * Rotate a key: revoke the old one and mint a new key for the same client,
+ * carrying over the label. Returns the new key (with raw secret) or null.
+ */
+export function rotateApiKey(id) {
+  const row = prep(`SELECT * FROM api_keys WHERE id = ?;`).get(id);
+  if (!row) return null;
+  revokeApiKey(id);
+  return createApiKey(row.client_id, row.name);
+}
+
+/**
+ * Resolve a raw bearer token to `{ client_id, api_key_id }` using the api_keys
+ * table (hashed lookup), or the legacy per-client `clients.api_key`. Ignores
+ * revoked keys. Touches last_used_at on a hit. Returns null when unrecognized.
+ */
+export function resolveApiKey(token) {
+  if (!token) return null;
+  const row = prep(`SELECT id, client_id, revoked_at FROM api_keys WHERE key_hash = ?;`)
+    .get(sha256hex(token));
+  if (row && !row.revoked_at) {
+    prep(`UPDATE api_keys SET last_used_at = datetime('now') WHERE id = ?;`).run(row.id);
+    return { client_id: row.client_id, api_key_id: row.id };
+  }
+  // Legacy single key stored raw on the client row.
+  const legacy = prep(`SELECT id FROM clients WHERE api_key = ?;`).get(token);
+  if (legacy) return { client_id: legacy.id, api_key_id: null };
+  return null;
+}
+
+// --- Messages ---------------------------------------------------------------
+
+export function recordMessage({
+  id,
+  clientId = null,
+  apiKeyId = null,
+  to = null,
+  body = null,
+  status = null,
+  providerSid = null,
+  error = null,
+}) {
+  return prep(`
+    INSERT INTO messages (id, client_id, api_key_id, to_number, body, status, provider_sid, error)
+    VALUES (@id, @clientId, @apiKeyId, @to, @body, @status, @providerSid, @error)
+    RETURNING *;
+  `).get({ id, clientId, apiKeyId, to, body, status, providerSid, error });
+}
+
+export function getMessage(id, clientId = null) {
+  const sql = scoped(`SELECT * FROM messages WHERE id = @id`, clientId);
+  return prep(sql).get(bind(clientId, { id }));
+}
+
+export function listMessages(clientId = null, { limit = 50, offset = 0 } = {}) {
+  const sql =
+    scoped(`SELECT * FROM messages`, clientId, { where: true }) +
+    ` ORDER BY created_at DESC LIMIT @limit OFFSET @offset;`;
+  return prep(sql).all(bind(clientId, { limit, offset }));
+}
+
+// --- Usage ------------------------------------------------------------------
+
+export function recordUsage({ clientId = null, apiKeyId = null, kind }) {
+  prep(`INSERT INTO usage_events (client_id, api_key_id, kind) VALUES (@clientId, @apiKeyId, @kind);`)
+    .run({ clientId, apiKeyId, kind });
+}
+
+/**
+ * Usage summary over a rolling window (SQLite modifier, e.g. '-30 days'; null =
+ * all time). `clientId` null aggregates across all clients (admin overview).
+ * Calls + minutes come from the calls table so completed-call durations are
+ * reflected; messages from the messages table.
+ */
+export function usageSummary(clientId = null, mod = null) {
+  const clientClause = (col) => (clientId != null ? ` AND ${col} = @clientId` : "");
+  const p = {};
+  if (clientId != null) p.clientId = clientId;
+  if (mod) p.mod = mod;
+  const calls = prep(
+    `SELECT COUNT(*) AS n, COALESCE(SUM(duration_seconds), 0) AS secs
+     FROM calls WHERE 1=1${clientClause("client_id")}${mod ? " AND placed_at >= datetime('now', @mod)" : ""};`
+  ).get(p);
+  const messages = prep(
+    `SELECT COUNT(*) AS n FROM messages WHERE 1=1${clientClause("client_id")}${mod ? " AND created_at >= datetime('now', @mod)" : ""};`
+  ).get(p);
+  return {
+    calls: calls.n,
+    minutes: Math.round((calls.secs / 60) * 10) / 10,
+    messages: messages.n,
+  };
+}
+
+/**
+ * Daily call counts + minutes for the last `days` days (for the usage chart).
+ * `clientId` null aggregates across all clients.
+ */
+export function usageDaily(clientId = null, days = 14) {
+  const clientClause = clientId != null ? ` AND client_id = @clientId` : "";
+  const p = { mod: `-${Number(days)} days` };
+  if (clientId != null) p.clientId = clientId;
+  return prep(`
+    SELECT date(placed_at) AS day, COUNT(*) AS calls,
+           COALESCE(SUM(duration_seconds), 0) AS secs
+    FROM calls
+    WHERE placed_at >= datetime('now', @mod)${clientClause}
+    GROUP BY date(placed_at) ORDER BY day ASC;
+  `).all(p);
+}
+
+// --- Outbound webhook config ------------------------------------------------
+
+export function getWebhook(clientId) {
+  return prep(`SELECT * FROM webhooks WHERE client_id = ?;`).get(clientId) || null;
+}
+
+/**
+ * Upsert a client's webhook config. Generates a signing secret the first time
+ * one is set. Passing `rotateSecret: true` mints a new secret.
+ */
+export function setWebhook(clientId, { url = null, enabled = true, rotateSecret = false } = {}) {
+  const existing = getWebhook(clientId);
+  const secret =
+    rotateSecret || !existing || !existing.secret
+      ? "whsec_" + crypto.randomBytes(24).toString("hex")
+      : existing.secret;
+  prep(`
+    INSERT INTO webhooks (client_id, url, secret, enabled, updated_at)
+    VALUES (@clientId, @url, @secret, @enabled, datetime('now'))
+    ON CONFLICT(client_id) DO UPDATE SET
+      url = excluded.url, secret = excluded.secret,
+      enabled = excluded.enabled, updated_at = datetime('now');
+  `).run({ clientId, url, secret, enabled: enabled ? 1 : 0 });
+  return getWebhook(clientId);
+}
+
+export function recordWebhookDelivery({
+  clientId = null,
+  event = null,
+  url = null,
+  statusCode = null,
+  ok = false,
+  error = null,
+  attempts = 1,
+}) {
+  prep(`
+    INSERT INTO webhook_deliveries (client_id, event, url, status_code, ok, error, attempts)
+    VALUES (@clientId, @event, @url, @statusCode, @ok, @error, @attempts);
+  `).run({ clientId, event, url, statusCode, ok: ok ? 1 : 0, error, attempts });
+}
+
+export function listWebhookDeliveries(clientId = null, limit = 50) {
+  const sql =
+    scoped(`SELECT * FROM webhook_deliveries`, clientId, { where: true }) +
+    ` ORDER BY created_at DESC LIMIT @limit;`;
+  return prep(sql).all(bind(clientId, { limit }));
+}
+
+// --- Request logs -----------------------------------------------------------
+
+// Keep the log bounded so it never grows without limit.
+const REQUEST_LOG_CAP = Number(process.env.REQUEST_LOG_CAP || 5000);
+
+export function recordRequestLog({
+  clientId = null,
+  apiKeyId = null,
+  method,
+  path,
+  status,
+  latencyMs,
+}) {
+  prep(`
+    INSERT INTO request_logs (client_id, api_key_id, method, path, status, latency_ms)
+    VALUES (@clientId, @apiKeyId, @method, @path, @status, @latencyMs);
+  `).run({ clientId, apiKeyId, method, path, status, latencyMs });
+  // Opportunistic prune: drop the oldest rows past the cap.
+  prep(`
+    DELETE FROM request_logs WHERE id IN (
+      SELECT id FROM request_logs ORDER BY id DESC LIMIT -1 OFFSET @cap
+    );
+  `).run({ cap: REQUEST_LOG_CAP });
+}
+
+export function listRequestLogs(clientId = null, { limit = 100 } = {}) {
+  const sql =
+    scoped(
+      `SELECT request_logs.*, clients.name AS client_name
+       FROM request_logs LEFT JOIN clients ON clients.id = request_logs.client_id`,
+      clientId,
+      { where: true, table: "request_logs" }
+    ) + ` ORDER BY request_logs.id DESC LIMIT @limit;`;
+  return prep(sql).all(bind(clientId, { limit }));
+}
+
+// --- Email signups (public /developers) -------------------------------------
+
+export function addEmailSignup(email, source = "developers") {
+  return prep(`
+    INSERT INTO email_signups (email, source) VALUES (@email, @source)
+    ON CONFLICT(email) DO NOTHING;
+  `).run({ email: String(email).trim(), source }).changes > 0;
+}
+
+export function listEmailSignups() {
+  return prep(`SELECT * FROM email_signups ORDER BY created_at DESC;`).all();
+}
+
+export function countEmailSignups() {
+  return prep(`SELECT COUNT(*) AS n FROM email_signups;`).get().n;
 }
 
 export default db;

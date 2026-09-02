@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Phone Agent API — Coming soon</title>
+<meta name="description" content="A developer API for AI phone calls, SMS, and contacts. Join the waitlist." />
+<style>
+  :root {
+    --bg: #0b0d10; --surface: #14181d; --border: #232a31;
+    --text: #e8edf2; --muted: #8b97a4; --accent: #5b8cff; --accent-2: #7aa2ff;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: radial-gradient(1200px 600px at 50% -10%, #17202e 0%, var(--bg) 55%);
+    color: var(--text); font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    display: flex; flex-direction: column; min-height: 100%;
+  }
+  .wrap { max-width: 720px; margin: 0 auto; padding: 0 24px; width: 100%; }
+  header { padding: 28px 0; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 650; letter-spacing: .2px; }
+  .logo { width: 26px; height: 26px; border-radius: 7px; background: linear-gradient(135deg, var(--accent), var(--accent-2)); display: grid; place-items: center; color: #fff; }
+  main { flex: 1; display: flex; align-items: center; }
+  .hero { padding: 40px 0 64px; }
+  .pill { display: inline-block; font-size: 12px; color: var(--accent-2); background: rgba(91,140,255,.12);
+          border: 1px solid rgba(91,140,255,.28); padding: 4px 10px; border-radius: 999px; margin-bottom: 20px; }
+  h1 { font-size: 40px; line-height: 1.1; margin: 0 0 16px; letter-spacing: -0.5px; }
+  h1 span { background: linear-gradient(120deg, var(--accent-2), #a9c1ff); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  p.lead { font-size: 17px; color: var(--muted); margin: 0 0 28px; max-width: 560px; }
+  form { display: flex; gap: 10px; max-width: 460px; flex-wrap: wrap; }
+  input[type=email] {
+    flex: 1; min-width: 220px; padding: 12px 14px; border-radius: 10px; border: 1px solid var(--border);
+    background: var(--surface); color: var(--text); font-size: 15px; outline: none;
+  }
+  input[type=email]:focus { border-color: var(--accent); }
+  button {
+    padding: 12px 18px; border-radius: 10px; border: 0; cursor: pointer; font-size: 15px; font-weight: 600;
+    color: #fff; background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  }
+  button:disabled { opacity: .6; cursor: default; }
+  .msg { margin-top: 14px; font-size: 14px; min-height: 20px; }
+  .msg.ok { color: #57d38c; }
+  .msg.err { color: #ff7a7a; }
+  .features { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 48px; }
+  .feat { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
+  .feat h3 { margin: 0 0 6px; font-size: 14px; }
+  .feat p { margin: 0; font-size: 13px; color: var(--muted); }
+  footer { color: var(--muted); font-size: 13px; padding: 24px 0; border-top: 1px solid var(--border); }
+  @media (max-width: 560px) { h1 { font-size: 32px; } .features { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div class="brand">
+        <span class="logo" aria-hidden="true">
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 3.2 6 3l1 2.5-1.4 1a7 7 0 0 0 3.9 3.9l1-1.4 2.5 1 -.2 2.5c-5 .6-9.6-4-9-9z"/></svg>
+        </span>
+        Phone Agent
+      </div>
+    </header>
+  </div>
+
+  <main>
+    <div class="wrap hero">
+      <span class="pill">Developer platform · Coming soon</span>
+      <h1>Build with <span>AI phone calls</span>,<br />SMS, and contacts.</h1>
+      <p class="lead">
+        A clean REST API for placing AI voice calls, sending texts, and managing contacts —
+        with usage tracking, rate limits, and signed webhooks. We're putting the finishing
+        touches on it. Leave your email and we'll let you know the moment it's ready.
+      </p>
+
+      <form id="signup">
+        <input id="email" type="email" placeholder="you@company.com" autocomplete="email" required />
+        <button id="submit" type="submit">Notify me</button>
+      </form>
+      <div id="msg" class="msg" role="status" aria-live="polite"></div>
+
+      <div class="features">
+        <div class="feat"><h3>REST API</h3><p>Versioned <code>/v1</code> endpoints for calls, messages, contacts, and batches.</p></div>
+        <div class="feat"><h3>Usage &amp; limits</h3><p>Per-key rate limiting and usage tracking for calls, minutes, and messages.</p></div>
+        <div class="feat"><h3>Signed webhooks</h3><p>Get notified on call completion with HMAC-signed payloads.</p></div>
+      </div>
+    </div>
+  </main>
+
+  <div class="wrap">
+    <footer>© Phone Agent · The developer console is invite-only during the beta.</footer>
+  </div>
+
+<script>
+  const form = document.getElementById("signup");
+  const msg = document.getElementById("msg");
+  const btn = document.getElementById("submit");
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const email = document.getElementById("email").value.trim();
+    msg.className = "msg"; msg.textContent = "";
+    if (!email) return;
+    btn.disabled = true;
+    try {
+      const res = await fetch("/developers/signup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        msg.className = "msg ok";
+        msg.textContent = data.already ? "You're already on the list — thanks!" : "You're on the list. We'll be in touch.";
+        form.reset();
+      } else {
+        msg.className = "msg err";
+        msg.textContent = (data.error && data.error.message) || data.error || "Something went wrong. Try again.";
+      }
+    } catch {
+      msg.className = "msg err";
+      msg.textContent = "Network error. Please try again.";
+    } finally {
+      btn.disabled = false;
+    }
+  });
+</script>
+</body>
+</html>

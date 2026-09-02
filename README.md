@@ -390,6 +390,62 @@ can **Approve** or **Flag** the account. A badge on the nav shows the pending
 count. Routes: `GET /api/review`, `POST /api/review/:callId {status}`,
 `GET /api/flags`, `POST /api/flags/:id/resolve`.
 
+## Developer API (`/v1`)
+
+The webhook server also exposes a versioned REST API for developers under
+**`/v1`**, authenticated with per-client API keys. Responses are consistent
+JSON: resources are flat objects with an `object` field, lists are
+`{ object: "list", data: [...] }`, and errors always use the shape
+`{ error: { type, code, message, param? } }` with a matching HTTP status.
+
+**Authentication.** Send `Authorization: Bearer <api_key>`. Keys are created and
+managed in the dashboard's **Developer** tab (admin only). The legacy per-client
+key and the global `TRIGGER_API_KEY` (→ Default client) are also accepted.
+
+**Endpoints**
+
+| Method & path | Description |
+| --- | --- |
+| `POST /v1/calls` | Place a call (`contact` name or `phone` + `objective`) |
+| `GET /v1/calls` | List calls (`limit`, `offset`) |
+| `GET /v1/calls/:id` | Retrieve a call |
+| `POST /v1/messages` | Send an SMS (`to`, `body`) |
+| `GET /v1/messages/:id` | Retrieve a message |
+| `GET /v1/contacts` · `POST /v1/contacts` | List / create contacts |
+| `GET·PUT·DELETE /v1/contacts/:id` | Retrieve / update / delete a contact |
+| `POST /v1/batches` | Place a batch (`names[]`, `objective`) |
+| `GET /v1/batches/:id` | Retrieve a batch and its calls |
+| `GET /v1/usage` | Usage totals (`period` = day\|week\|month\|all) |
+| `GET·PUT /v1/webhooks` | Get / set the outbound webhook config |
+| `GET /v1/openapi.json` | Machine-readable OpenAPI 3.1 spec (public) |
+
+**Rate limiting & usage.** Each key gets a sliding-window rate limit
+(`V1_RATE_PER_MIN`, default 120/min) with `X-RateLimit-Limit`,
+`X-RateLimit-Remaining`, and `X-RateLimit-Reset` headers, returning `429` with
+`Retry-After` when exceeded. Every request is logged (status + latency) and
+call/message actions are tracked for `GET /v1/usage`.
+
+**Outbound webhooks.** Configure a webhook URL per client (Developer tab or
+`PUT /v1/webhooks`). When a call ends we `POST` a signed `call.completed` event:
+
+```
+X-PhoneAgent-Event:     call.completed
+X-PhoneAgent-Timestamp: 1718900000
+X-PhoneAgent-Signature: sha256=<hmac>
+```
+
+Verify with `hmac = HMAC_SHA256(secret, "<timestamp>.<raw_body>")`. Delivery
+retries a few times (`WEBHOOK_MAX_ATTEMPTS`) and every attempt is logged.
+
+### Developer console & public page
+
+- **Developer tab** (admin dashboard only): create / rotate / revoke multiple
+  API keys, view usage charts, a request log with status codes + latency, and
+  API docs generated from the OpenAPI spec. Backed by `requireAdmin` routes
+  under `/api/developer/*` — no client or role can reach it, by UI or direct URL.
+- **Public `/developers` page**: an open "coming soon" landing page with email
+  capture (`POST /developers/signup`). It exposes no keys, docs, or console.
+
 ## Web dashboard
 
 Running `npm run webhook` also serves a dark-theme web dashboard at
@@ -458,10 +514,14 @@ src/
   guard.js    Abuse guard: classification, rate limits, review flagging, detection
   trigger.js  Inbound trigger endpoint: bearer auth, rate limit, out-of-hours queue
   callhours.js   Business-hours window parsing + timezone evaluation
-  webhook.js  Express server (port 3117): Vapi webhook + dashboard + /api routes
-  dashboard.js   Loads and serves the admin dashboard, client, and login HTML
-  dashboard.html Admin dashboard (client switcher, results, config) — HTML/CSS/JS
+  webhook.js  Express server (port 3117): Vapi webhook + dashboard + /api + /v1 + /developers
+  apiv1.js    Versioned developer REST API (/v1): key auth, rate limit, usage, request log
+  openapi.js  OpenAPI 3.1 spec builder (served at /v1/openapi.json; drives the docs)
+  outboundwebhooks.js  Signed call.completed webhook delivery (HMAC) + retries
+  dashboard.js   Loads and serves the admin dashboard, client, login, and developers HTML
+  dashboard.html Admin dashboard (client switcher, results, config, Developer tab) — HTML/CSS/JS
   client.html    Read-only client results workspace — HTML/CSS/JS
+  developers.html Public "coming soon" developers landing page (email capture)
   login.html     Self-contained login page
 scripts/
   hash-password.js  Generate a bcrypt hash for DASHBOARD_PASSWORD_HASH

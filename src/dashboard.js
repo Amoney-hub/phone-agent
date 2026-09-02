@@ -10,6 +10,7 @@ const __dirname =
 const htmlPath = path.join(__dirname, "dashboard.html");
 const loginPath = path.join(__dirname, "login.html");
 const clientPath = path.join(__dirname, "client.html");
+const developersPath = path.join(__dirname, "developers.html");
 
 /**
  * Return the self-contained dashboard HTML. Read from disk each call so edits
@@ -27,4 +28,9 @@ export function renderLogin() {
 /** Return the self-contained client (read-only) results page HTML. */
 export function renderClient() {
   return fs.readFileSync(clientPath, "utf8");
+}
+
+/** Return the public "coming soon" developers landing page HTML. */
+export function renderDevelopers() {
+  return fs.readFileSync(developersPath, "utf8");
 }
