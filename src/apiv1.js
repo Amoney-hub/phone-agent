@@ -151,6 +151,18 @@ export function _resetV1RateLimit() {
 export function createV1Router() {
   const router = express.Router();
 
+  // CORS: the API is key-authenticated (no cookies), so a wildcard origin is
+  // safe and lets static pages call it directly from the browser. Preflight
+  // requests carry no Authorization header, so answer them before auth.
+  router.use((req, res, next) => {
+    res.set("Access-Control-Allow-Origin", "*");
+    res.set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+    res.set("Access-Control-Allow-Headers", "Authorization, Content-Type");
+    res.set("Access-Control-Expose-Headers", "X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset, Retry-After");
+    if (req.method === "OPTIONS") return res.sendStatus(204);
+    next();
+  });
+
   // Public: the machine-readable spec (docs are generated from it).
   router.get("/openapi.json", (req, res) => {
     const proto = req.headers["x-forwarded-proto"] || req.protocol;
